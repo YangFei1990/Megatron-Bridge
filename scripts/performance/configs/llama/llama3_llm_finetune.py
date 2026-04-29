@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import logging
+from typing import Any
 
 from utils.overrides import set_workload_base_configs
 from utils.precision import get_precision_config
@@ -31,8 +32,35 @@ from megatron.bridge.training.config import ConfigContainer
 
 logger = logging.getLogger(__name__)
 
+try:
+    import megatron.bridge  # noqa: F401
+
+    HAVE_MEGATRON_BRIDGE = True
+except ModuleNotFoundError:
+    HAVE_MEGATRON_BRIDGE = False
+
 
 # Llama3 8B Finetune configs ---------------------------------------------------------
+
+
+def _drop_total_tokens_from_gpt_packed_seq_params() -> None:
+    """Temporarily avoid dense Llama seq_idx generation in packed sequence params."""
+    if not HAVE_MEGATRON_BRIDGE:
+        return
+
+    from megatron.bridge.training import gpt_step
+
+    original_get_packed_seq_params = gpt_step.get_packed_seq_params
+    if getattr(original_get_packed_seq_params, "_llama3_dense_lora_drop_total_tokens", False):
+        return
+
+    def get_packed_seq_params_without_total_tokens(batch: dict[str, Any]) -> Any:
+        batch_without_total_tokens = dict(batch)
+        batch_without_total_tokens.pop("total_tokens", None)
+        return original_get_packed_seq_params(batch_without_total_tokens)
+
+    setattr(get_packed_seq_params_without_total_tokens, "_llama3_dense_lora_drop_total_tokens", True)
+    gpt_step.get_packed_seq_params = get_packed_seq_params_without_total_tokens
 
 
 def set_llama3_common_peft_configs(cfg: ConfigContainer) -> None:
@@ -223,6 +251,10 @@ def llama3_70b_lora_config_gb300(precision: str = "bf16", config_variant: str = 
     # for CUDA graphs and avoids NaN issues in attention kernels.
     cfg.dataset.packed_sequence_specs.pad_cu_seqlens = True
     cfg.dataset.dataset_kwargs["pad_to_max_length"] = True
+
+    # TODO: Remove this benchmark-local workaround once dense GPT packed sequence params
+    # no longer request Mamba/SSM seq_idx generation through total_tokens.
+    _drop_total_tokens_from_gpt_packed_seq_params()
 
     return cfg
 
