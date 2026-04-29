@@ -370,6 +370,7 @@ def slice_batch_for_context_parallel(
                 "attention_mask": attention_mask,
             },
             cp_group=cp_group,
+            is_hybrid_cp=False,
         )
 
         inputs_embeds = cp_batch.get("decoder_input")
