@@ -31,13 +31,6 @@ from megatron.bridge.training.config import ConfigContainer
 
 logger = logging.getLogger(__name__)
 
-try:
-    import megatron.bridge  # noqa: F401
-
-    HAVE_MEGATRON_BRIDGE = True
-except ModuleNotFoundError:
-    HAVE_MEGATRON_BRIDGE = False
-
 
 # Llama3 8B Finetune configs ---------------------------------------------------------
 
