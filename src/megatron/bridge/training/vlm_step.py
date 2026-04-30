@@ -610,8 +610,12 @@ def forward_step(
             "cu_seqlens": cu_padded,
             "cu_seqlens_argmin": torch.tensor(len(cu_padded)),
             "max_seqlen": max_seqlen_out,
-            "total_tokens": tokens.size(1) if tokens is not None else labels.size(1),
         }
+        # total_tokens drives seq_idx computation in PackedSeqParams.__post_init__,
+        # which is only needed for Mamba/hybrid SSM layers. Skip it for pure
+        # transformer models to avoid per-step CUDA overhead.
+        if getattr(config, "is_hybrid_model", False):
+            packed_seq_dict["total_tokens"] = tokens.size(1) if tokens is not None else labels.size(1)
         # Build an explicit padding mask for MoE routing/aux-loss accounting.
         # True means padding token that should be excluded from MoE statistics.
         moe_padding_mask = torch.zeros_like(tokens, dtype=torch.bool)
