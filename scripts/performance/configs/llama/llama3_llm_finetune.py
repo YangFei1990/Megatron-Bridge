@@ -76,6 +76,10 @@ def set_llama3_common_peft_configs(cfg: ConfigContainer) -> None:
     cfg.ddp.use_distributed_optimizer = True
     cfg.optimizer.use_distributed_optimizer = True
 
+    # TODO: Remove this benchmark-local workaround once dense GPT packed sequence params
+    # no longer request Mamba/SSM seq_idx generation through total_tokens.
+    _drop_total_tokens_from_gpt_packed_seq_params()
+
 
 def llama3_8b_sft_config_gb200(precision: str = "bf16", config_variant: str = "v1") -> ConfigContainer:
     """GB200, SFT config."""
@@ -251,10 +255,6 @@ def llama3_70b_lora_config_gb300(precision: str = "bf16", config_variant: str = 
     # for CUDA graphs and avoids NaN issues in attention kernels.
     cfg.dataset.packed_sequence_specs.pad_cu_seqlens = True
     cfg.dataset.dataset_kwargs["pad_to_max_length"] = True
-
-    # TODO: Remove this benchmark-local workaround once dense GPT packed sequence params
-    # no longer request Mamba/SSM seq_idx generation through total_tokens.
-    _drop_total_tokens_from_gpt_packed_seq_params()
 
     return cfg
 
