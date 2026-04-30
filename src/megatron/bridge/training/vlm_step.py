@@ -408,7 +408,9 @@ def get_batch(data_iterator: Iterable, cfg: ConfigContainer, use_mtp: bool = Fal
 
         if force_single_segment_cu and tokens_or_input is not None:
             seq_len = int(tokens_or_input.shape[-1])
-            device = energon_cu_seqlens.device if isinstance(energon_cu_seqlens, torch.Tensor) else tokens_or_input.device
+            device = (
+                energon_cu_seqlens.device if isinstance(energon_cu_seqlens, torch.Tensor) else tokens_or_input.device
+            )
             energon_cu_seqlens = torch.tensor([0, seq_len], dtype=torch.int32, device=device)
             energon_max_seqlen = torch.tensor(seq_len, dtype=torch.int32, device=device)
             energon_cu_argmin = torch.tensor(2, dtype=torch.int64)
