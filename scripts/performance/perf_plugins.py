@@ -369,7 +369,7 @@ class PerfEnvPlugin(Plugin):
                 executor.env_vars["NUM_OF_HYBRID_EP_RANKS_PER_NVLINK_DOMAIN"] = str(ep_size)
             # Workaround for unfused combine performance regression in DeepEP hybrid-ep.
             # Remove after https://github.com/NVIDIA/Megatron-LM/pull/4089 lands.
-            executor.env_vars["NUM_OF_TOKENS_PER_CHUNK_COMBINE_API"] = "128"
+            # executor.env_vars["NUM_OF_TOKENS_PER_CHUNK_COMBINE_API"] = "128"
 
     def _set_nccl_pp_comm_chunksize(
         self,

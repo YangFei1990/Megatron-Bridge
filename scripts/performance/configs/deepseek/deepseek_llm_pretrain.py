@@ -77,6 +77,8 @@ def deepseek_v3_pretrain_config_gb300(
 
     cfg.comm_overlap.overlap_grad_reduce = True
 
+    cfg.model.moe_permute_fusion_into_hybridep = True
+
     return cfg
 
 
@@ -111,6 +113,8 @@ def deepseek_v3_pretrain_config_gb200(
     set_workload_base_configs(cfg, base_cfg)
 
     cfg.comm_overlap.overlap_grad_reduce = True
+
+    cfg.model.moe_permute_fusion_into_hybridep = True
 
     return cfg
 
