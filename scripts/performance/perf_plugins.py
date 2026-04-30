@@ -42,6 +42,7 @@ except (ImportError, ModuleNotFoundError):
     from .utils.utils import get_workload_base_config
 
 logger: logging.Logger = logging.getLogger(__name__)
+NSYS_SQLITE_EXPORT_ARG = "--export=sqlite"
 
 
 def _format_list_for_override(values: List | int):
@@ -52,6 +53,21 @@ def _format_list_for_override(values: List | int):
     if isinstance(values, int):
         values = [values]
     return "[" + ",".join(str(v) for v in values) + "]"
+
+
+def _ensure_sqlite_nsys_export(nsys_extra_args: list[str]) -> list[str]:
+    """Ensure nsys emits a SQLite export after profiling finishes."""
+    for index, arg in enumerate(nsys_extra_args):
+        export_values = None
+        if arg == "--export" and index + 1 < len(nsys_extra_args):
+            export_values = nsys_extra_args[index + 1]
+        elif arg.startswith("--export="):
+            export_values = arg.split("=", 1)[1]
+
+        if export_values is not None and "sqlite" in export_values.split(","):
+            return nsys_extra_args
+
+    return nsys_extra_args + [NSYS_SQLITE_EXPORT_ARG]
 
 
 @dataclass
@@ -80,7 +96,7 @@ class NsysPlugin(Plugin):
     """
     A plugin for nsys profiling configuration.
 
-    The NsysPlugin allows you to profile your run using nsys.
+    The NsysPlugin allows you to profile your run using nsys and exports a SQLite report.
     You can specify when to start and end the profiling, on which ranks to run the profiling,
     and what to trace during profiling.
 
@@ -128,6 +144,8 @@ class NsysPlugin(Plugin):
             # Combine user args with existing args (user args first for precedence)
             launcher.nsys_extra_args = self.nsys_extra_args + existing_extra_args
             logger.info(f"Combined nsys_extra_args: {launcher.nsys_extra_args}")
+
+        launcher.nsys_extra_args = _ensure_sqlite_nsys_export(launcher.nsys_extra_args or [])
 
         if isinstance(executor, SlurmExecutor):
             # NOTE: DO NOT change to f-string, `%q{}` is Slurm placeholder
