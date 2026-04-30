@@ -125,6 +125,7 @@ def _nemotron_omni_base_config(
     cfg.model.pipeline_dtype = None
     cfg.model.virtual_pipeline_model_parallel_size = None
     cfg.model.context_parallel_size = 1
+    cfg.model.expert_tensor_parallel_size = 1
     cfg.model.sequence_parallel = True
 
     cfg.model.freeze_vision_model = True
