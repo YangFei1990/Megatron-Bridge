@@ -35,16 +35,11 @@ from megatron.bridge.training.utils.padding_utils import (
     pad_or_truncate_pos_to_len,
 )
 from megatron.bridge.training.utils.pg_utils import get_pg_collection
+from megatron.bridge.utils.common_utils import is_rank_0
 
 
 logger = logging.getLogger(__name__)
 _SWITCH_LOGGED: set[str] = set()
-
-
-def _rank0() -> bool:
-    if not torch.distributed.is_available() or not torch.distributed.is_initialized():
-        return True
-    return torch.distributed.get_rank() == 0
 
 
 def _thd_diag_enabled() -> bool:
@@ -57,7 +52,7 @@ def _thd_diag_boundary_enabled() -> bool:
 
 def _switch_enabled(name: str) -> bool:
     enabled = os.environ.get(name, "0") not in ("0", "", "false", "False")
-    if enabled and _rank0() and name not in _SWITCH_LOGGED:
+    if enabled and is_rank_0() and name not in _SWITCH_LOGGED:
         logger.info("[THD_SWITCH] %s=1 enabled", name)
         _SWITCH_LOGGED.add(name)
     return enabled
@@ -333,7 +328,7 @@ def get_batch(data_iterator: Iterable, cfg: ConfigContainer, use_mtp: bool = Fal
     force_bshd = _thd_force_bshd_enabled()
     force_single_segment_cu = _thd_force_single_segment_cu_enabled()
 
-    if force_bshd and force_single_segment_cu and _rank0():
+    if force_bshd and force_single_segment_cu and is_rank_0():
         logger.warning(
             "[THD_SWITCH] THD_FORCE_BSHD=1 overrides THD_FORCE_SINGLE_SEGMENT_CU=1 (single-segment CU ignored)."
         )
@@ -414,7 +409,7 @@ def get_batch(data_iterator: Iterable, cfg: ConfigContainer, use_mtp: bool = Fal
             energon_cu_seqlens = torch.tensor([0, seq_len], dtype=torch.int32, device=device)
             energon_max_seqlen = torch.tensor(seq_len, dtype=torch.int32, device=device)
             energon_cu_argmin = torch.tensor(2, dtype=torch.int64)
-            if _thd_diag_enabled() and _rank0():
+            if _thd_diag_enabled() and is_rank_0():
                 logger.info("[THD_SWITCH] force single-segment cu_seqlens=[0, %d]", seq_len)
 
         # Log detailed packed-iteration diagnostics when explicitly enabled.
@@ -596,7 +591,7 @@ def forward_step(
             cu_padded[-1] = physical_seq_len
             max_seqlen_out = (cu_padded[1:] - cu_padded[:-1]).max()
         else:
-            if last_boundary < physical_seq_len and _thd_diag_enabled() and _rank0():
+            if last_boundary < physical_seq_len and _thd_diag_enabled() and is_rank_0():
                 logger.info(
                     "[THD_SWITCH] skip packed-pos preprocess: preserve original cu_seqlens last_boundary=%d physical_seq_len=%d",
                     last_boundary,
@@ -632,7 +627,7 @@ def forward_step(
         # Pass unpadded boundaries only to Qwen model's MRoPE construction.
         forward_args["rope_cu_seqlens"] = cu_unpadded
         forward_args["moe_padding_mask"] = moe_padding_mask
-        if _thd_diag_enabled() and _rank0():
+        if _thd_diag_enabled() and is_rank_0():
             logger.info(
                 "[THD_DIAG][packed] physical_seq_len=%d cu_unpadded_last=%d cu_padded_last=%d implicit_pad=%d max_seqlen=%d moe_padding_tokens=%d",
                 int(physical_seq_len),
@@ -642,7 +637,7 @@ def forward_step(
                 int(max_seqlen_out.item()) if torch.is_tensor(max_seqlen_out) else int(max_seqlen_out),
                 int(moe_padding_mask.sum().item()),
             )
-        if _thd_diag_boundary_enabled() and _rank0():
+        if _thd_diag_boundary_enabled() and is_rank_0():
             cu_padded_cpu = cu_padded.detach().cpu()
             cu_unpadded_cpu = cu_unpadded.detach().cpu()
             seg_lens_padded = (cu_padded_cpu[1:] - cu_padded_cpu[:-1]).tolist()
@@ -714,7 +709,7 @@ def forward_step(
             else:
                 output_tensor = model_output
 
-    if _thd_diag_enabled() and _rank0() and loss_mask is not None:
+    if _thd_diag_enabled() and is_rank_0() and loss_mask is not None:
         loss_mask_flat = loss_mask.view(-1)
         valid_loss_tokens = int((loss_mask_flat > 0).sum().item())
         total_loss_tokens = int(loss_mask_flat.numel())
