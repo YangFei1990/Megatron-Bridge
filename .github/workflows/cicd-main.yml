@@ -69,8 +69,8 @@ jobs:
   pre-flight:
     uses: NVIDIA-NeMo/FW-CI-templates/.github/workflows/_cicd_preflight.yml@v0.80.1
     with:
-      default_runner_prefix: nemo-ci-aws-gpu-x2
-      non_nvidia_runner_prefix: nemo-ci-aws-gpu-x2-ephemeral
+      default_runner_prefix: nemo-ci-aws-gpu-x2-ephemeral-dev
+      non_nvidia_runner_prefix: nemo-ci-aws-gpu-x2-ephemeral-dev
       default_test_data_path: /mnt/datadrive/TestData/nemo-fw/TestData
       non_nvidia_test_data_path: /mnt/datadrive/TestData/nemo-fw/TestData
       default_registry: 766267172432.dkr.ecr.us-east-1.amazonaws.com
