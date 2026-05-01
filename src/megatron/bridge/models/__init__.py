@@ -57,9 +57,14 @@ from megatron.bridge.models.gemma_vl import (
 from megatron.bridge.models.glm import (
     GLM45Bridge,
 )
-from megatron.bridge.models.glm_moe_dsa import (
-    GLM5Bridge,
-)
+
+
+try:
+    from megatron.bridge.models.glm_moe_dsa import (
+        GLM5Bridge,
+    )
+except ImportError:
+    GLM5Bridge = None  # transformers too old; upgrade to >=5.0 for GlmMoeDsa support
 from megatron.bridge.models.glm_vl import (
     GLM45VBridge,
     GLM45VModelProvider,
