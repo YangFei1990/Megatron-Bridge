@@ -14,6 +14,7 @@
 
 import importlib
 from pathlib import Path
+from typing import Optional
 
 import torch.nn.functional as F
 
@@ -26,13 +27,39 @@ from megatron.bridge.utils.vocab_utils import calculate_padded_vocab_size
 _lora_seq_stats_cache: dict = {}
 
 
-def num_floating_point_operations(cfg: ConfigContainer, batch_size: int = 1):
-    """Return the number of floating point operations"""
+def num_floating_point_operations(
+    cfg: ConfigContainer,
+    batch_size: int = 1,
+    seqlen_sum_this_global_batch: Optional[float] = None,
+    seqlen_squared_sum_this_global_batch: Optional[float] = None,
+):
+    """Return the number of floating point operations.
+
+    Supports both fixed-length and variable-length (THD packed) sequence accounting.
+
+    Args:
+        cfg: Top-level configuration container.
+        batch_size: Number of samples in the batch (used only when the seqlen sums below
+            are not supplied; left as ``1`` to compute per-sample model FLOPs).
+        seqlen_sum_this_global_batch: Sum of token counts across all sequences in the
+            global batch. When ``None`` it is derived as
+            ``batch_size * cfg.model.seq_length`` (BSHD assumption).
+        seqlen_squared_sum_this_global_batch: Sum of squared sequence lengths across all
+            sequences in the global batch. When ``None`` it is derived as
+            ``batch_size * cfg.model.seq_length ** 2`` (BSHD assumption).
+    """
     peft = getattr(cfg, "peft", None)
     is_lora = isinstance(peft, LoRA)
     # If the model provider has a custom TFLOPS calculation method, use it (non-LoRA only).
     if not is_lora and hasattr(cfg.model, "_get_num_floating_point_operations"):
         return cfg.model._get_num_floating_point_operations(batch_size)
+
+    # Derive seqlen sums from the BSHD geometry when the caller does not provide them.
+    seq_length = cfg.model.seq_length
+    if seqlen_sum_this_global_batch is None:
+        seqlen_sum_this_global_batch = batch_size * seq_length
+    if seqlen_squared_sum_this_global_batch is None:
+        seqlen_squared_sum_this_global_batch = batch_size * seq_length * seq_length
 
     def calculate_layer_counts():
         """Calculate the number of attention, Mamba, MLP, MoE, and GDN layers."""
@@ -64,14 +91,13 @@ def num_floating_point_operations(cfg: ConfigContainer, batch_size: int = 1):
             num_gdn_layers = 0
             return num_attn_layers, num_mamba_layers, num_mlp_layers, num_moe_layers, num_gdn_layers
 
-    def mlp_layer_flops(batch_size, seq_len, hidden_size, expansion=4.0, swiglu=False):
+    def mlp_layer_flops(seqlen_sum, hidden_size, expansion=4.0, swiglu=False):
         """Calculate FLOPs for an MLP layer."""
         scale_factor = 3.0 / 2.0 if swiglu else 1.0
-        return 4 * expansion * scale_factor * batch_size * seq_len * hidden_size**2
+        return 4 * expansion * scale_factor * seqlen_sum * hidden_size**2
 
     def moe_layer_flops(
-        batch_size,
-        seq_len,
+        seqlen_sum,
         hidden_size,
         moe_ffn_hidden_size,
         shared_expert_ffn_hidden_size,
@@ -82,42 +108,42 @@ def num_floating_point_operations(cfg: ConfigContainer, batch_size: int = 1):
         """Calculate FLOPs for an MoE layer."""
         scale_factor = 3.0 / 2.0 if swiglu else 1.0
         if moe_latent_size is None:
-            routed_flops = (
-                4 * batch_size * seq_len * hidden_size * moe_ffn_hidden_size * num_experts_routed_to * scale_factor
-            )
+            routed_flops = 4 * seqlen_sum * hidden_size * moe_ffn_hidden_size * num_experts_routed_to * scale_factor
         else:
             # Routed experts run on moe_latent_size.
             routed_flops = (
-                4 * batch_size * seq_len * moe_latent_size * moe_ffn_hidden_size * num_experts_routed_to * scale_factor
+                4 * seqlen_sum * moe_latent_size * moe_ffn_hidden_size * num_experts_routed_to * scale_factor
             )
             # Up proj and down proj.
-            routed_flops += 4 * batch_size * seq_len * hidden_size * moe_latent_size
-        shared_flops = 4 * batch_size * seq_len * hidden_size * shared_expert_ffn_hidden_size * scale_factor
+            routed_flops += 4 * seqlen_sum * hidden_size * moe_latent_size
+        shared_flops = 4 * seqlen_sum * hidden_size * shared_expert_ffn_hidden_size * scale_factor
         return routed_flops + shared_flops
 
     def attn_layer_flops(
-        batch_size,
-        seq_len,
+        seqlen_sum,
+        seqlen_squared_sum,
         hidden_size,
         num_heads,
         gqa_groups=8,
         kv_channels=None,
     ):
-        """Calculate FLOPs for an attention layer."""
+        """Calculate FLOPs for an attention layer.
+
+        Uses ``seqlen_sum`` for projection terms (linear in tokens) and
+        ``seqlen_squared_sum`` for the core attention term (quadratic in
+        sequence length, summed across packed sequences).
+        """
         p = (kv_channels * num_heads / hidden_size) if kv_channels else 1
         g = gqa_groups
         return (
             4
-            * batch_size
-            * seq_len
             * hidden_size
             * p
-            * (hidden_size + (hidden_size * (g / num_heads)) + (seq_len / 2))
+            * (hidden_size * seqlen_sum + (hidden_size * (g / num_heads)) * seqlen_sum + seqlen_squared_sum / 2)
         )
 
     def mamba_layer_flops(
-        batch_size,
-        seq_len,
+        seqlen_sum,
         hidden_size,
         state_dim=16,
         head_dim=64,
@@ -133,14 +159,13 @@ def num_floating_point_operations(cfg: ConfigContainer, batch_size: int = 1):
         else:
             nheads = d_in // head_dim
         return (
-            (2 * batch_size * seq_len * hidden_size * (2 * d_in + 2 * num_groups * state_dim + nheads))  # in_proj
-            + (7 * batch_size * seq_len * d_in * state_dim)  # scan
-            + (2 * batch_size * seq_len * d_in * hidden_size)  # out_proj
+            (2 * seqlen_sum * hidden_size * (2 * d_in + 2 * num_groups * state_dim + nheads))  # in_proj
+            + (7 * seqlen_sum * d_in * state_dim)  # scan
+            + (2 * seqlen_sum * d_in * hidden_size)  # out_proj
         )
 
     def gdn_layer_flops(
-        batch_size,
-        seq_len,
+        seqlen_sum,
         hidden_size,
         qk_head_dim=128,
         v_head_dim=128,
@@ -153,8 +178,7 @@ def num_floating_point_operations(cfg: ConfigContainer, batch_size: int = 1):
         v_dim = v_head_dim * num_v_heads
         return (
             2
-            * batch_size
-            * seq_len
+            * seqlen_sum
             * (
                 hidden_size * (2 * qk_dim + 2 * v_dim + 2 * num_v_heads)
                 + conv_kernel_dim * (2 * qk_dim + v_dim)
@@ -164,8 +188,8 @@ def num_floating_point_operations(cfg: ConfigContainer, batch_size: int = 1):
         )
 
     def hybrid_flops(
-        batch_size,
-        seq_len,
+        seqlen_sum,
+        seqlen_squared_sum,
         hidden_size,
         num_attn_layers,
         num_mamba_layers,
@@ -197,18 +221,17 @@ def num_floating_point_operations(cfg: ConfigContainer, batch_size: int = 1):
         flops_fwd = (
             num_attn_layers
             * attn_layer_flops(
-                batch_size,
-                seq_len,
+                seqlen_sum,
+                seqlen_squared_sum,
                 hidden_size,
                 num_attn_heads,
                 gqa_groups,
                 kv_channels,
             )
-            + num_mlp_layers * mlp_layer_flops(batch_size, seq_len, hidden_size, mlp_expansion, swiglu)
+            + num_mlp_layers * mlp_layer_flops(seqlen_sum, hidden_size, mlp_expansion, swiglu)
             + num_mamba_layers
             * mamba_layer_flops(
-                batch_size,
-                seq_len,
+                seqlen_sum,
                 hidden_size,
                 mamba_state_dim,
                 mamba_head_dim,
@@ -217,8 +240,7 @@ def num_floating_point_operations(cfg: ConfigContainer, batch_size: int = 1):
             )
             + num_moe_layers
             * moe_layer_flops(
-                batch_size,
-                seq_len,
+                seqlen_sum,
                 hidden_size,
                 moe_ffn_hidden_size,
                 shared_expert_ffn_hidden_size,
@@ -228,8 +250,7 @@ def num_floating_point_operations(cfg: ConfigContainer, batch_size: int = 1):
             )
             + num_gdn_layers
             * gdn_layer_flops(
-                batch_size,
-                seq_len,
+                seqlen_sum,
                 hidden_size,
                 gdn_qk_head_dim,
                 gdn_v_head_dim,
@@ -237,7 +258,7 @@ def num_floating_point_operations(cfg: ConfigContainer, batch_size: int = 1):
                 gdn_num_v_heads,
                 gdn_conv_kernel_dim,
             )
-            + (2 * batch_size * seq_len * hidden_size * vocab_size * (1 + mtp_num_layers))  # logits computation
+            + (2 * seqlen_sum * hidden_size * vocab_size * (1 + mtp_num_layers))  # logits computation
         )
         return flops_fwd * 3
 
@@ -340,15 +361,21 @@ def num_floating_point_operations(cfg: ConfigContainer, batch_size: int = 1):
             3 if (cfg.model.gated_linear_unit is True and cfg.model.activation_func == F.silu) else 2
         )
 
+        # Self-attention FLOPs are decomposed into a token-linear part (multiplied by
+        # seqlen_sum_this_global_batch) and a sequence-quadratic part (multiplied by
+        # seqlen_squared_sum_this_global_batch). This unifies BSHD and THD packed accounting.
         if cfg.model.multi_latent_attention:
             """
-            Basic arithmetic
-            let B is batch size, s is seq_len, h is embedding dim,
-            for one self_attnetion block (prenorm is not included)
-            qkv projection:  6Bsh^2
-            attn:            2Bs^2h
-            attn over value: 2Bs^2h
-            oproj:           2Bsh^2
+            Basic arithmetic.
+            Let h be the embedding dim. The two seqlen statistics handle fixed and packed cases:
+                seqlen_sum_this_global_batch        (= B*s in BSHD; sum of s_i in THD)
+                seqlen_squared_sum_this_global_batch (= B*s^2 in BSHD; sum of s_i^2 in THD)
+
+            For one self-attention block (prenorm not included):
+                qkv projection:    6 * seqlen_sum * h^2
+                attn QK^T:         seqlen_squared_sum * h
+                attn (QK^T)V:      seqlen_squared_sum * h
+                oproj:             2 * seqlen_sum * h^2
 
             references
             https://arxiv.org/abs/2305.10403
@@ -368,32 +395,36 @@ def num_floating_point_operations(cfg: ConfigContainer, batch_size: int = 1):
                     * (getattr(cfg.model, "qk_head_dim", 64) + getattr(cfg.model, "qk_pos_emb_head_dim", 0))
                     + 1
                 )
+            attn_linear_per_layer = (
+                ## q lora + rope + q norm
+                q_term
+                ## kv lora + rope + kv norm
+                + getattr(cfg.model, "kv_lora_rank", 0)
+                * (
+                    cfg.model.hidden_size
+                    + cfg.model.num_attention_heads
+                    * (getattr(cfg.model, "qk_head_dim", 64) + getattr(cfg.model, "v_head_dim", 64))
+                    + 1
+                )
+                + cfg.model.hidden_size * getattr(cfg.model, "qk_pos_emb_head_dim", 0)
+                ## o proj
+                + (cfg.model.num_attention_heads * getattr(cfg.model, "v_head_dim", 64)) * cfg.model.hidden_size
+            )
+            attn_quadratic_per_layer = (
+                ## core attn QK^T
+                cfg.model.num_attention_heads
+                * (getattr(cfg.model, "qk_head_dim", 64) + getattr(cfg.model, "qk_pos_emb_head_dim", 0))
+                / 2  # causal mask (only half of the mask is non-zero)
+                ## core attn (QK^T)V
+                + cfg.model.num_attention_heads * getattr(cfg.model, "v_head_dim", 64) / 2
+            )
             self_attn_term = (
                 3
                 * 2  # fwd(1) + bwd(2) *FMA
                 * num_layers
                 * (
-                    ## q lora + rope + q norm
-                    q_term
-                    ## kv lora + rope + kv norm
-                    + getattr(cfg.model, "kv_lora_rank", 0)
-                    * (
-                        cfg.model.hidden_size
-                        + cfg.model.num_attention_heads
-                        * (getattr(cfg.model, "qk_head_dim", 64) + getattr(cfg.model, "v_head_dim", 64))
-                        + 1
-                    )
-                    + cfg.model.hidden_size * getattr(cfg.model, "qk_pos_emb_head_dim", 0)
-                    ## o proj
-                    + (cfg.model.num_attention_heads * getattr(cfg.model, "v_head_dim", 64)) * cfg.model.hidden_size
-                    ## core attn
-                    + cfg.model.seq_length
-                    * (
-                        cfg.model.num_attention_heads
-                        * (getattr(cfg.model, "qk_head_dim", 64) + getattr(cfg.model, "qk_pos_emb_head_dim", 0))
-                    )
-                    / 2
-                    + cfg.model.seq_length * cfg.model.num_attention_heads * getattr(cfg.model, "v_head_dim", 64) / 2
+                    seqlen_sum_this_global_batch * attn_linear_per_layer
+                    + seqlen_squared_sum_this_global_batch * attn_quadratic_per_layer
                 )
             )
 
@@ -407,6 +438,7 @@ def num_floating_point_operations(cfg: ConfigContainer, batch_size: int = 1):
                 * (query_projection_size + key_projection_size + value_projection_size + gate_projection_size)
                 + query_projection_size * cfg.model.hidden_size
             )
+            attn_quadratic_per_layer = query_projection_size  # full-attention core: q_proj * seqlen^2
 
             window_size = getattr(cfg.model, "window_size", None)
             window_attn_skip_freq = getattr(cfg.model, "window_attn_skip_freq", None)
@@ -433,20 +465,31 @@ def num_floating_point_operations(cfg: ConfigContainer, batch_size: int = 1):
                     num_swa_layers = 0
                     num_full_attn_layers = num_layers
 
-                full_core = query_projection_size * cfg.model.seq_length / 2 * 2
-                swa_core = query_projection_size * swa_context / 2 * 2
+                # SWA core attention is bounded by swa_context (linear in tokens).
+                swa_linear_per_layer = proj_per_layer + query_projection_size * swa_context
 
                 self_attn_term = (
                     3
                     * 2
                     * (
-                        num_full_attn_layers * (proj_per_layer + full_core)
-                        + num_swa_layers * (proj_per_layer + swa_core)
+                        num_full_attn_layers
+                        * (
+                            seqlen_sum_this_global_batch * proj_per_layer
+                            + seqlen_squared_sum_this_global_batch * attn_quadratic_per_layer
+                        )
+                        + num_swa_layers * seqlen_sum_this_global_batch * swa_linear_per_layer
                     )
                 )
             else:
-                full_core = query_projection_size * cfg.model.seq_length / 2 * 2
-                self_attn_term = 3 * 2 * num_layers * (proj_per_layer + full_core)
+                self_attn_term = (
+                    3
+                    * 2
+                    * num_layers
+                    * (
+                        seqlen_sum_this_global_batch * proj_per_layer
+                        + seqlen_squared_sum_this_global_batch * attn_quadratic_per_layer
+                    )
+                )
 
         # Handle GDN (Gated DeltaNet) hybrid attention variant.
         # When experimental_attention_variant is "gated_delta_net", a fraction of the
@@ -479,8 +522,6 @@ def num_floating_point_operations(cfg: ConfigContainer, batch_size: int = 1):
             num_gdn_layers = sum(linear_attention_pattern)
             num_standard_attn_layers = num_layers - num_gdn_layers
 
-            standard_self_attn_per_layer = self_attn_term / num_layers if num_layers > 0 else 0
-
             qk_head_dim = cfg.model.linear_key_head_dim
             v_head_dim = cfg.model.linear_value_head_dim
             num_qk_heads = cfg.model.linear_num_key_heads
@@ -490,19 +531,33 @@ def num_floating_point_operations(cfg: ConfigContainer, batch_size: int = 1):
             qk_dim = qk_head_dim * num_qk_heads
             v_dim = v_head_dim * num_v_heads
 
-            gdn_self_attn_per_layer = (
+            # GDN core is fully linear in tokens.
+            gdn_linear_per_layer = (
+                cfg.model.hidden_size * (2 * qk_dim + 2 * v_dim + 2 * num_v_heads)
+                + conv_kernel_dim * (2 * qk_dim + v_dim)
+                + num_v_heads * (v_head_dim**2) * 4
+                + cfg.model.hidden_size * v_dim
+            )
+
+            # Standard-attention layers retain both linear and quadratic terms.
+            # MLA + GDN is unusual; default to MHA/GQA full-attention costs when not MLA.
+            if cfg.model.multi_latent_attention:
+                std_linear_per_layer = attn_linear_per_layer
+            else:
+                std_linear_per_layer = proj_per_layer
+            std_quadratic_per_layer = attn_quadratic_per_layer
+
+            self_attn_term = (
                 3
                 * 2
                 * (
-                    cfg.model.hidden_size * (2 * qk_dim + 2 * v_dim + 2 * num_v_heads)
-                    + conv_kernel_dim * (2 * qk_dim + v_dim)
-                    + num_v_heads * (v_head_dim**2) * 4
-                    + cfg.model.hidden_size * v_dim
+                    num_standard_attn_layers
+                    * (
+                        seqlen_sum_this_global_batch * std_linear_per_layer
+                        + seqlen_squared_sum_this_global_batch * std_quadratic_per_layer
+                    )
+                    + num_gdn_layers * seqlen_sum_this_global_batch * gdn_linear_per_layer
                 )
-            )
-
-            self_attn_term = (
-                gdn_self_attn_per_layer * num_gdn_layers + standard_self_attn_per_layer * num_standard_attn_layers
             )
 
         padded_vocab_size = calculate_padded_vocab_size(
@@ -525,8 +580,7 @@ def num_floating_point_operations(cfg: ConfigContainer, batch_size: int = 1):
             ) + 2 * moe_latent_size
 
         total_floating_point_operations = (
-            batch_size
-            * cfg.model.seq_length
+            seqlen_sum_this_global_batch
             * (
                 # MLP
                 3
@@ -540,8 +594,6 @@ def num_floating_point_operations(cfg: ConfigContainer, batch_size: int = 1):
                     # Shared Experts.
                     + (shared_expert_ffn_hidden_size * ffn_expansion_factor) * num_moe_layers
                 )
-                # Self Attention
-                + self_attn_term
                 # MTP norms and proj
                 + 3
                 * 2
@@ -555,6 +607,8 @@ def num_floating_point_operations(cfg: ConfigContainer, batch_size: int = 1):
                 # Logit.
                 + 3 * 2 * cfg.model.hidden_size * padded_vocab_size * (mtp_num_layers + 1)
             )
+            # Self Attention (already expanded with seqlen_sum and seqlen_squared_sum factors)
+            + self_attn_term
         )
         return total_floating_point_operations
 
@@ -589,8 +643,8 @@ def num_floating_point_operations(cfg: ConfigContainer, batch_size: int = 1):
 
         # Compute hybrid model FLOPs.
         return hybrid_flops(
-            batch_size=batch_size,
-            seq_len=cfg.model.seq_length,
+            seqlen_sum=seqlen_sum_this_global_batch,
+            seqlen_squared_sum=seqlen_squared_sum_this_global_batch,
             hidden_size=cfg.model.hidden_size,
             num_attn_layers=num_attn_layers,
             num_mamba_layers=num_mamba_layers,

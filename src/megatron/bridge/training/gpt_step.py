@@ -163,6 +163,37 @@ def get_batch(
         cu_seqlens, cu_seqlens_argmin, max_seqlen, cu_seqlens_unpadded, and
         cu_seqlens_unpadded_argmin
     """
+    # Sequence packing (THD) E2E path: when a sequence-packing scheduler is configured,
+    # delegate to the mcore data scheduler which handles TP/PP broadcasting and CP
+    # partitioning internally. Middle PP stages still need cu_seqlens metadata, so this
+    # dispatches *before* the standard PP-stage gating below.
+    if getattr(cfg.model, "sequence_packing_scheduler", None) is not None:
+        # Lazy import: requires Megatron-Core with NVIDIA/Megatron-LM PR #3386 merged.
+        from megatron.core.datasets.data_schedule import get_batch_on_this_rank_for_sequence_packing
+
+        mtp_on_this_rank = use_mtp and is_pp_last_stage(pg_collection.pp)
+        tokens, labels, loss_mask, position_ids, packed_seq_params = get_batch_on_this_rank_for_sequence_packing(
+            data_iterator,
+            vpp_size=getattr(cfg.model, "virtual_pipeline_model_parallel_size", None),
+            mtp_on_this_rank=mtp_on_this_rank,
+            vp_stage=None,
+        )
+        # Map mcore PackedSeqParams to Bridge's flat 10-tuple. Attention mask is implicit
+        # under THD (cu_seqlens-based flash attention); padded/unpadded distinctions are
+        # not surfaced by the mcore helper, so they are left None for downstream callers.
+        return (
+            tokens,
+            labels,
+            loss_mask,
+            None,  # attention_mask
+            position_ids,
+            getattr(packed_seq_params, "cu_seqlens_q", None),
+            None,  # cu_seqlens_argmin
+            getattr(packed_seq_params, "max_seqlen_q", None),
+            None,  # cu_seqlens_unpadded
+            None,  # cu_seqlens_unpadded_argmin
+        )
+
     # Determine pipeline stage role via process group collection
     is_first = is_pp_first_stage(pg_collection.pp)
     is_last = is_pp_last_stage(pg_collection.pp)

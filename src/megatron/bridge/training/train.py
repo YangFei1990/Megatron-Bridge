@@ -442,6 +442,8 @@ def train(
             grad_norm,
             num_zeros_in_grad,
             log_max_attention_logit,
+            seqlen_sum_this_global_batch,
+            seqlen_squared_sum_this_global_batch,
         ) = wrapped_train_step(
             wrapped_forward_step_func,
             train_data_iterator,
@@ -537,7 +539,18 @@ def train(
         else:
             assert num_skipped_samples_in_batch == 0
         global_state.train_state.skipped_train_samples += num_skipped_samples_in_batch
-        num_floating_point_operations_in_batch = num_floating_point_operations_model * batch_size
+        # For THD packed batches, FLOPs depend on the actual token distribution returned
+        # from the data scheduler; recompute per step. For BSHD (fixed seq_length), the
+        # precomputed per-sample model FLOPs * batch_size remains exact and avoids the
+        # per-iteration recomputation cost.
+        if getattr(model_config, "sequence_packing", False):
+            num_floating_point_operations_in_batch = flop_utils.num_floating_point_operations(
+                config,
+                seqlen_sum_this_global_batch=seqlen_sum_this_global_batch,
+                seqlen_squared_sum_this_global_batch=seqlen_squared_sum_this_global_batch,
+            )
+        else:
+            num_floating_point_operations_in_batch = num_floating_point_operations_model * batch_size
         global_state.train_state.floating_point_operations_so_far += num_floating_point_operations_in_batch
         num_floating_point_operations_so_far = global_state.train_state.floating_point_operations_so_far
         num_floating_point_operations_since_last_log_event += num_floating_point_operations_in_batch
@@ -757,7 +770,9 @@ def train_step(
     pg_collection: ProcessGroupCollection,
     forward_backward_func: Callable,
     p2p_communicator: P2PCommunicator,
-) -> tuple[dict[str, torch.Tensor], int, bool, bool, int, Optional[float], Optional[int]]:
+) -> tuple[
+    dict[str, torch.Tensor], int, bool, bool, int, Optional[float], Optional[int], Optional[float], float, float
+]:
     """Single training step.
 
     Args:
@@ -780,6 +795,10 @@ def train_step(
         - grad_norm: Gradient norm if available, None otherwise
         - num_zeros_in_grad: Number of zeros in gradient if available, None otherwise
         - max_attention_logit: Maximum attention logit if available, None otherwise
+        - seqlen_sum_this_global_batch: Total token count across the global batch
+          (sum of sequence lengths). Used by FLOPs accounting for THD packed batches.
+        - seqlen_squared_sum_this_global_batch: Sum of squared sequence lengths across
+          the global batch. Used by FLOPs accounting for THD packed batches.
     """
     cfg: ConfigContainer = global_state.cfg
     timers = global_state.timers
@@ -837,12 +856,34 @@ def train_step(
         else:
             adjust_tensor_shapes_fn = None
 
+        # Sequence packing (THD): wrap the data iterator to schedule and pack samples
+        # across DP×CP, returning the packed iterator, the number of microbatches it
+        # produced, and the seqlen sums needed for accurate FLOPs accounting. When
+        # packing is disabled, derive the same statistics from the BSHD geometry.
+        if getattr(model_config, "sequence_packing", False):
+            # Imported lazily to keep this an optional dependency on Megatron-Core
+            # versions that ship the data scheduler (NVIDIA/Megatron-LM PR #3386+).
+            from megatron.core.datasets.data_schedule import wrap_data_iterator
+
+            (
+                forward_backward_data_iterator,
+                fb_num_microbatches,
+                seqlen_sum_this_global_batch,
+                seqlen_squared_sum_this_global_batch,
+            ) = wrap_data_iterator(forward_backward_data_iterator, model_config, get_num_microbatches())
+        else:
+            fb_num_microbatches = get_num_microbatches()
+            mbs = train_config.micro_batch_size
+            dp = cfg.data_parallel_size
+            seqlen_sum_this_global_batch = seq_length * mbs * dp * fb_num_microbatches
+            seqlen_squared_sum_this_global_batch = seq_length * seq_length * mbs * dp * fb_num_microbatches
+
         # Forward pass.
         losses_reduced = forward_backward_func(
             forward_step_func=forward_step_func,
             data_iterator=forward_backward_data_iterator,
             model=model,
-            num_microbatches=get_num_microbatches(),
+            num_microbatches=fb_num_microbatches,
             seq_length=seq_length,
             micro_batch_size=train_config.micro_batch_size,
             decoder_seq_length=seq_length,
@@ -853,7 +894,18 @@ def train_step(
         )
     should_checkpoint, should_exit, exit_code = rerun_state_machine.should_checkpoint_and_exit()
     if should_exit:
-        return {}, True, should_checkpoint, should_exit, exit_code, None, None, None
+        return (
+            {},
+            True,
+            should_checkpoint,
+            should_exit,
+            exit_code,
+            None,
+            None,
+            None,
+            seqlen_sum_this_global_batch,
+            seqlen_squared_sum_this_global_batch,
+        )
 
     # Empty unused memory.
     if train_config.empty_unused_memory_level >= 1:
@@ -929,6 +981,8 @@ def train_step(
             grad_norm,
             num_zeros_in_grad,
             log_max_attention_logit,
+            seqlen_sum_this_global_batch,
+            seqlen_squared_sum_this_global_batch,
         )
     return (
         {},
@@ -939,6 +993,8 @@ def train_step(
         grad_norm,
         num_zeros_in_grad,
         log_max_attention_logit,
+        seqlen_sum_this_global_batch,
+        seqlen_squared_sum_this_global_batch,
     )
 
 
