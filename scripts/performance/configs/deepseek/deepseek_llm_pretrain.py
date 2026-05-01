@@ -115,7 +115,7 @@ def deepseek_v3_pretrain_config_gb200(
     cfg.comm_overlap.overlap_grad_reduce = True
 
     cfg.model.moe_permute_fusion_into_hybridep = True
-    cfg.model.moe_hybridep_num_sms = 16
+    cfg.model.moe_hybridep_num_sms = 32
     cfg.model.moe_hybridep_num_blocks_permute = 108
     cfg.model.moe_hybridep_num_blocks_unpermute = 108
 
