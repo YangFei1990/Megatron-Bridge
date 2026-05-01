@@ -113,13 +113,13 @@ def llama31_405b_pretrain_config_gb200(
 
 
 def llama31_405b_pretrain_config_b300(
-    precision: str = "bf16", mock: bool = True, config_variant: str = "v1"
+    precision: str = "bf16", mock: bool = True, config_variant: str = "v2"
 ) -> ConfigContainer:
     """B300, baseline config."""
     base_cfg = get_workload_base_config(
         model_family_name="llama",
         model_recipe_name="llama31_405b",
-        gpu="b300",
+        gpu="gb300",
         compute_dtype=precision.upper(),
         task="pretrain",
         config_variant=config_variant,
@@ -143,13 +143,13 @@ def llama31_405b_pretrain_config_b300(
 
 
 def llama31_405b_pretrain_config_b200(
-    precision: str = "bf16", mock: bool = True, config_variant: str = "v1"
+    precision: str = "bf16", mock: bool = True, config_variant: str = "v2"
 ) -> ConfigContainer:
     """B200, baseline config."""
     base_cfg = get_workload_base_config(
         model_family_name="llama",
         model_recipe_name="llama31_405b",
-        gpu="b200",
+        gpu="gb200",
         compute_dtype=precision.upper(),
         task="pretrain",
         config_variant=config_variant,
