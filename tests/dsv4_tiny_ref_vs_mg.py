@@ -128,14 +128,19 @@ sys.modules["fast_hadamard_transform"] = fht_mock
 
 # ── Step 2: Tiny config ───────────────────────────────────────────────────
 
-# First: test with all compress_ratio=0 to validate HC + attention + MoE.
-# Indexer (compress_ratio=4/128) has a dtype mismatch bug — test separately later.
+# 6 layers covering all 4 DSv4 layer types:
+#   Layer 0: hash + compress_ratio=0   (hash routing, no compressor)
+#   Layer 1: hash + compress_ratio=0   (hash routing, no compressor)
+#   Layer 2: hash + compress_ratio=4   (hash routing, compressor + indexer)
+#   Layer 3: MLA  + compress_ratio=128 (standard routing, compressor only)
+#   Layer 4: MLA  + compress_ratio=4   (standard routing, compressor + indexer)
+#   Layer 5: MLA  + compress_ratio=128 (standard routing, compressor only)
 TINY_CONFIG = {
     "model_type": "deepseek_v4",
     "hidden_size": 256,
     "num_hidden_layers": 6,
     "num_hash_layers": 3,
-    "compress_ratios": [0, 0, 0, 0, 0, 0],
+    "compress_ratios": [0, 0, 4, 128, 4, 128],
     "num_attention_heads": 8,
     "num_key_value_heads": 1,
     "head_dim": 64,
@@ -238,6 +243,11 @@ def create_ref_model():
     torch.set_default_dtype(torch.bfloat16)
     torch.set_default_device("cuda")
     m = ref_model.Transformer(args)
+    # Default init may produce zeros — manually init all params
+    with torch.no_grad():
+        for p in m.parameters():
+            if p.numel() > 0:
+                p.normal_(0, 0.02)
     m.eval()
     return m, ref_model
 
@@ -252,15 +262,33 @@ def run_ref_forward(ref_m, input_ids):
 
         def make_hook(idx):
             def fn(mod, inp, out):
-                if isinstance(out, torch.Tensor):
-                    layer_outs[idx] = out.detach().float().cpu()
+                t = out[0] if isinstance(out, (tuple, list)) else out
+                if isinstance(t, torch.Tensor) and t.numel() > 0:
+                    layer_outs[idx] = t.detach().float().cpu()
+                    if idx == 0:
+                        print(
+                            f"  [ref hook] layer {idx}: shape={list(t.shape)}, norm={t.float().norm():.4f}", flush=True
+                        )
 
             return fn
 
         hooks.append(layer.register_forward_hook(make_hook(i)))
 
     ids = torch.tensor([input_ids], dtype=torch.long, device="cuda")
+    # Diagnostic: check embedding output
     with torch.no_grad():
+        h = ref_m.embed(ids)
+        print(
+            f"  [ref diag] embed: shape={list(h.shape)}, norm={h.float().norm():.4f}, mean={h.float().mean():.6f}",
+            flush=True,
+        )
+        h = h.unsqueeze(2).expand(-1, -1, ref_m.hc_mult, -1).contiguous()
+        print(f"  [ref diag] after HC expand: shape={list(h.shape)}, norm={h.float().norm():.4f}", flush=True)
+        # Run first layer manually
+        h_layer0 = ref_m.layers[0](h, 0, ids)
+        print(
+            f"  [ref diag] after layer 0: shape={list(h_layer0.shape)}, norm={h_layer0.float().norm():.4f}", flush=True
+        )
         logits = ref_m(ids, start_pos=0)
     for h in hooks:
         h.remove()
@@ -326,8 +354,13 @@ def run_megatron_forward(mg_model, input_ids):
             def make_hook(idx):
                 def fn(mod, inp, out):
                     t = out[0] if isinstance(out, (tuple, list)) else out
-                    if isinstance(t, torch.Tensor):
+                    if isinstance(t, torch.Tensor) and t.numel() > 0:
                         layer_outs[idx] = t.detach().float().cpu()
+                        if idx == 0:
+                            print(
+                                f"  [mg hook] layer {idx}: shape={list(t.shape)}, norm={t.float().norm():.4f}",
+                                flush=True,
+                            )
 
                 return fn
 
