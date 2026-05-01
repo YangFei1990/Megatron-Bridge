@@ -56,7 +56,7 @@ def _format_list_for_override(values: List | int):
 
 
 def _ensure_sqlite_nsys_export(nsys_extra_args: list[str]) -> list[str]:
-    """Ensure nsys emits a SQLite export after profiling finishes."""
+    """Add SQLite export unless nsys export args already request it."""
     for index, arg in enumerate(nsys_extra_args):
         export_values = None
         if arg == "--export" and index + 1 < len(nsys_extra_args):
@@ -96,7 +96,7 @@ class NsysPlugin(Plugin):
     """
     A plugin for nsys profiling configuration.
 
-    The NsysPlugin allows you to profile your run using nsys and exports a SQLite report.
+    The NsysPlugin allows you to profile your run using nsys.
     You can specify when to start and end the profiling, on which ranks to run the profiling,
     and what to trace during profiling.
 
@@ -109,6 +109,7 @@ class NsysPlugin(Plugin):
             'nvtx' and 'cuda' events will be traced.
         record_shapes (bool): Whether to record tensor shapes. Default is False.
         nsys_gpu_metrics (bool): Whether to enable GPU metrics collection. Default is False.
+        export_sqlite (bool): Whether to export a SQLite report after profiling finishes. Default is False.
         script_args_converter_fn (Optional[Callable]): A function that takes NsysPluginScriptArgs
                                                         and returns a list of CLI arguments. If not provided,
                                                         uses the default hydra-style converter.
@@ -126,6 +127,7 @@ class NsysPlugin(Plugin):
     nsys_extra_args: Optional[list[str]] = None
     record_shapes: bool = False
     nsys_gpu_metrics: bool = False
+    export_sqlite: bool = False
     script_args_converter_fn: Optional[Callable[[NsysPluginScriptArgs], List[str]]] = None
 
     def setup(self, task: Union["run.Partial", "run.Script"], executor: "run.Executor"):
@@ -145,7 +147,8 @@ class NsysPlugin(Plugin):
             launcher.nsys_extra_args = self.nsys_extra_args + existing_extra_args
             logger.info(f"Combined nsys_extra_args: {launcher.nsys_extra_args}")
 
-        launcher.nsys_extra_args = _ensure_sqlite_nsys_export(launcher.nsys_extra_args or [])
+        if self.export_sqlite:
+            launcher.nsys_extra_args = _ensure_sqlite_nsys_export(launcher.nsys_extra_args or [])
 
         if isinstance(executor, SlurmExecutor):
             # NOTE: DO NOT change to f-string, `%q{}` is Slurm placeholder

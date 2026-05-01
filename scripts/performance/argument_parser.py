@@ -628,7 +628,12 @@ def parse_cli_args():
     performance_args.add_argument(
         "-en",
         "--enable_nsys",
-        help="Enable Nsys profiling and export a SQLite report after profiling finishes. Disabled by default",
+        help="Enable Nsys profiling. Disabled by default",
+        action="store_true",
+    )
+    performance_args.add_argument(
+        "--export_nsys_sqlite",
+        help="Export a SQLite report after Nsys profiling finishes. Requires --enable_nsys.",
         action="store_true",
     )
     performance_args.add_argument(
