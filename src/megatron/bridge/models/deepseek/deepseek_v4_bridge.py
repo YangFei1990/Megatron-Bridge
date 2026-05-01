@@ -27,7 +27,7 @@ HuggingFace Transformers naming conventions:
   - layers.N.ffn.gate / experts / shared_experts …
   - layers.N.hc_attn_fn / hc_attn_base / hc_attn_scale  (Hyper-Connections)
   - layers.N.hc_ffn_fn  / hc_ffn_base  / hc_ffn_scale
-  - hc_head_fn / hc_head_base / hc_head_scale            (global HC head)
+  - hc_head_fn / hc_head_base / hc_head_scale            (global HC head, learned output contraction)
   - mtp.N.*                                               (MTP layers)
 
 All linear weights are FP8 (float8_e4m3fn) with per-128×128-block scales
@@ -103,8 +103,9 @@ class DeepseekV4Config(PretrainedConfig):
 # method is called.
 try:
     AutoConfig.register("deepseek_v4", DeepseekV4Config)
-except ValueError:
-    pass  # already registered
+except ValueError as e:
+    if "already registered" not in str(e):
+        raise
 
 
 # ---------------------------------------------------------------------------
@@ -179,6 +180,7 @@ class _HCAlphaSecondaryMapping(MegatronParamMapping):
     def __init__(self, megatron_param: str, hf_scale_param: str, index: int):
         super().__init__(megatron_param=megatron_param, hf_param=hf_scale_param)
         self._index = index
+        self.allow_hf_name_mismatch = True  # export is no-op; skip hf_keys check
 
     def hf_to_megatron(self, hf_weights, megatron_module):
         attr = "alpha_post" if self._index == 1 else "alpha_res"
@@ -335,18 +337,36 @@ class DeepSeekV4Bridge(MegatronModelBridge):
         provider.apply_rope_fusion = False
         provider.rope_type = "yarn"
         provider.rotary_base = float(hf_config.rope_theta)  # 10000
-        provider.rotary_scaling_factor = float(hf_config.rope_scaling["factor"])  # 16
-        provider.original_max_position_embeddings = int(
-            hf_config.rope_scaling["original_max_position_embeddings"]
-        )  # 65536
-        provider.beta_fast = float(hf_config.rope_scaling.get("beta_fast", 32))
-        provider.beta_slow = float(hf_config.rope_scaling.get("beta_slow", 1))
+        # Handle both transformers <5 (flat) and >=5 (nested 'main'/'compress') rope_scaling
+        rs = hf_config.rope_scaling
+        if "factor" not in rs and "main" in rs:
+            rs = rs["main"]  # transformers 5.x nests under 'main'
+        provider.rotary_scaling_factor = float(rs["factor"])  # 16
+        provider.original_max_position_embeddings = int(rs["original_max_position_embeddings"])  # 65536
+        provider.beta_fast = float(rs.get("beta_fast", 32))
+        provider.beta_slow = float(rs.get("beta_slow", 1))
 
         # ---- CSA (Compressed Sparse Attention) ----
-        # compress_ratios has num_hidden_layers + num_nextn_predict_layers entries;
-        # csa_compress_ratios covers only the main transformer layers.
-        num_main_layers = hf_config.num_hidden_layers
-        provider.csa_compress_ratios = list(hf_config.compress_ratios[:num_main_layers])
+        # compress_ratios has num_hidden_layers + num_nextn_predict_layers entries in HF config.
+        # Merged code validates len == num_layers + mtp_num_layers.
+        _cr = getattr(hf_config, "compress_ratios", None) or getattr(hf_config, "compress_rates", None)
+        if _cr is None:
+            raise ValueError(
+                "HF config missing both 'compress_ratios' and 'compress_rates'. "
+                "DeepSeek-V4 requires per-layer compression ratios."
+            )
+        _cr = list(_cr)
+        _mtp = getattr(hf_config, "num_nextn_predict_layers", None)
+        if _mtp is None:
+            import logging
+
+            logging.warning(
+                "HF config missing 'num_nextn_predict_layers'; defaulting to 0. "
+                "DeepSeek-V4-Flash uses num_nextn_predict_layers=1."
+            )
+            _mtp = 0
+        _expected = hf_config.num_hidden_layers + _mtp
+        provider.csa_compress_ratios = _cr[:_expected]
         provider.csa_window_size = hf_config.sliding_window  # 128
 
         # DSA indexer geometry (matches index_n_heads / index_head_dim / index_topk in config)
@@ -557,7 +577,7 @@ class DeepSeekV4Bridge(MegatronModelBridge):
             AutoMapping("output_layer.weight", "head.weight"),
             AutoMapping("decoder.final_layernorm.weight", "norm.weight"),
             # Global HC head (lives on TransformerBlock, not a parallel module → replicated)
-            ReplicatedMapping("decoder.hc_head_fn.weight", "hc_head_fn"),
+            ReplicatedMapping("decoder.hc_head_fn", "hc_head_fn"),
             ReplicatedMapping("decoder.hc_head_base", "hc_head_base"),
             ReplicatedMapping("decoder.hc_head_scale", "hc_head_scale"),
         ]
@@ -588,7 +608,7 @@ class DeepSeekV4Bridge(MegatronModelBridge):
             ),
             # KV (single projection) / KV norm
             AutoMapping(
-                "decoder.layers.*.self_attention.linear_kv_up_proj.weight",
+                "decoder.layers.*.self_attention.linear_kv_proj.weight",
                 "layers.*.attn.wkv.weight",
             ),
             AutoMapping(
@@ -762,7 +782,7 @@ class DeepSeekV4Bridge(MegatronModelBridge):
                 (f"{mg_pfx}.mtp_model_layer.self_attention.linear_q_down_proj.weight", f"{ck_pfx}.attn.wq_a.weight"),
                 (f"{mg_pfx}.mtp_model_layer.self_attention.q_layernorm.weight", f"{ck_pfx}.attn.q_norm.weight"),
                 (f"{mg_pfx}.mtp_model_layer.self_attention.linear_q_up_proj.weight", f"{ck_pfx}.attn.wq_b.weight"),
-                (f"{mg_pfx}.mtp_model_layer.self_attention.linear_kv_up_proj.weight", f"{ck_pfx}.attn.wkv.weight"),
+                (f"{mg_pfx}.mtp_model_layer.self_attention.linear_kv_proj.weight", f"{ck_pfx}.attn.wkv.weight"),
                 (f"{mg_pfx}.mtp_model_layer.self_attention.kv_layernorm.weight", f"{ck_pfx}.attn.kv_norm.weight"),
                 (f"{mg_pfx}.mtp_model_layer.self_attention.linear_proj.weight", f"{ck_pfx}.attn.wo_b.weight"),
                 (f"{mg_pfx}.mtp_model_layer.mlp.router.weight", f"{ck_pfx}.ffn.gate.weight"),
@@ -787,9 +807,7 @@ class DeepSeekV4Bridge(MegatronModelBridge):
                 (f"{mg_pfx}.mtp_model_layer.mlp_hyper_connection.mapping_proj.weight", f"{ck_pfx}.hc_ffn_fn"),
                 (f"{mg_pfx}.mtp_model_layer.mlp_hyper_connection.bias", f"{ck_pfx}.hc_ffn_base"),
                 # MTP HC head
-                (f"{mg_pfx}.hc_head_fn.weight", f"{ck_pfx}.hc_head_fn"),
-                (f"{mg_pfx}.hc_head_base", f"{ck_pfx}.hc_head_base"),
-                (f"{mg_pfx}.hc_head_scale", f"{ck_pfx}.hc_head_scale"),
+                # MTP HC head: not mapped yet (MTP disabled for inference via disable_mtp_for_inference)
             ]
             for mg, hf in _mtp_plain:
                 mappings.append(AutoMapping(mg, hf))
