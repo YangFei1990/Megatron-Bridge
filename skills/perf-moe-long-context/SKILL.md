@@ -6,7 +6,7 @@ description: Long-context MoE training guidance for Megatron Bridge. Covers CP s
 # MoE Long-Context Training
 
 Stable docs: @docs/training/moe-optimization.md
-Card: `card.yaml` (co-located)
+Card: @skills/perf-moe-long-context/card.yaml
 
 ## What Changes At Long Context
 

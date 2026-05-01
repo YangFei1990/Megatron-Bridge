@@ -6,7 +6,7 @@ description: Practical guidance for training MoE VLMs in Megatron Bridge. Compar
 # MoE VLM Training
 
 Stable docs: @docs/training/moe-optimization.md
-Card: `card.yaml` (co-located)
+Card: @skills/perf-moe-vlm-training/card.yaml
 
 ## FSDP vs 3D Parallel
 

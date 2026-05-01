@@ -8,7 +8,7 @@ description: Validate and use packed sequences and long-context training in Mega
 For stable background and recommendation level, see:
 
 - @docs/training/packed-sequences.md
-- `card.yaml` (co-located)
+- @skills/perf-sequence-packing/card.yaml
 
 ## Enablement
 

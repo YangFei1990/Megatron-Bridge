@@ -6,7 +6,7 @@ description: Resiliency features in Megatron Bridge including fault tolerance, s
 # Resiliency
 
 Stable docs: @docs/training/resiliency.md, @docs/training/checkpointing.md
-Card: `card.yaml` (co-located)
+Card: @skills/resiliency/card.yaml
 
 ## Enablement
 

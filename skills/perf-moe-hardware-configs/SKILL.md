@@ -6,7 +6,7 @@ description: Representative MoE training playbooks by hardware platform and mode
 # MoE Hardware Configuration Reference
 
 Stable docs: @docs/training/moe-optimization.md
-Card: `card.yaml` (co-located)
+Card: @skills/perf-moe-hardware-configs/card.yaml
 
 ## Quick Platform Playbook
 

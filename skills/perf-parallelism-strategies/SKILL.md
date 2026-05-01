@@ -8,7 +8,7 @@ description: Operational guide for choosing and combining parallelism strategies
 For stable background on each parallelism type, see:
 
 - @docs/parallelisms.md
-- `card.yaml` (co-located)
+- @skills/perf-parallelism-strategies/card.yaml
 
 ## Decision by Model Size
 

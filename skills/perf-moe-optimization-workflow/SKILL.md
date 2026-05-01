@@ -6,7 +6,7 @@ description: Systematic workflow for MoE training optimization in Megatron Bridg
 # MoE Training Optimization Workflow
 
 Stable docs: @docs/training/moe-optimization.md
-Card: `card.yaml` (co-located)
+Card: @skills/perf-moe-optimization-workflow/card.yaml
 Source: [Scalable Training of MoE Models with Megatron Core](https://arxiv.org/abs/2603.07685)
 
 ## Quick Reference

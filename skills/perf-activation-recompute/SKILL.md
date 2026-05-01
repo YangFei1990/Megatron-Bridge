@@ -6,7 +6,7 @@ description: Validate and use selective and full activation recompute in Megatro
 # Activation Recompute
 
 Stable docs: @docs/training/activation-recomputation.md
-Card: `card.yaml` (co-located)
+Card: @skills/perf-activation-recompute/card.yaml
 
 ## What It Is
 

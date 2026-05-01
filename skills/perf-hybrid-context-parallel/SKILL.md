@@ -8,7 +8,7 @@ description: Operational guide for enabling hierarchical context parallelism in 
 For what HCP is, when to use it, and the decision tree (a2a+p2p vs pure a2a vs p2p), see:
 
 - @docs/training/hybrid-context-parallel.md
-- `card.yaml` (co-located)
+- @skills/perf-hybrid-context-parallel/card.yaml
 
 ## Enablement
 
@@ -125,7 +125,7 @@ cp_comm_type: Optional[Union[str, List[str]]] = None
 
 ## Verification
 
-No dedicated Bridge end-to-end test exists yet for HCP (see `card.yaml`
+No dedicated Bridge end-to-end test exists yet for HCP (see @skills/perf-hybrid-context-parallel/card.yaml
 `follow_up_validation`). Use the existing unit tests and log inspection instead.
 
 Run the decentralized-PG unit test to confirm the flat-CP behavior is preserved:

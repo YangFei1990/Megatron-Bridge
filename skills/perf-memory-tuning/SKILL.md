@@ -6,7 +6,7 @@ description: Techniques for reducing peak GPU memory in Megatron Bridge — expa
 # Memory Tuning
 
 Stable docs: @docs/parallelisms.md
-Card: `card.yaml` (co-located)
+Card: @skills/perf-memory-tuning/card.yaml
 
 ## What It Is
 

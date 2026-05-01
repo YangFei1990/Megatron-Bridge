@@ -8,7 +8,7 @@ description: Validate and use CPU offloading in Megatron Bridge, including layer
 ## References
 
 - Stable docs: @docs/training/cpu-offloading.md
-- Structured metadata: `skills/perf-techniques/cpu-offloading/card.yaml`
+- Structured metadata: @skills/perf-cpu-offloading/card.yaml
 
 ## What It Is
 

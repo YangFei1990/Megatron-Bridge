@@ -8,7 +8,7 @@ description: Operational guide for enabling Megatron FSDP in Megatron-Bridge, in
 For stable background and recommendation level, see:
 
 - @docs/training/megatron-fsdp.md
-- `card.yaml` (co-located)
+- @skills/perf-megatron-fsdp/card.yaml
 
 ## Enablement
 

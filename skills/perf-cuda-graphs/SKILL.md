@@ -6,7 +6,7 @@ description: Validate and use CUDA graph capture in Megatron Bridge, including l
 # CUDA Graphs
 
 Stable docs: @docs/training/cuda-graphs.md
-Card: `card.yaml` (co-located)
+Card: @skills/perf-cuda-graphs/card.yaml
 
 ## What It Is
 
