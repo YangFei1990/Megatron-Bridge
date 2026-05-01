@@ -26,8 +26,8 @@ from megatron.bridge.utils.common_utils import (
     get_master_port_safe,
     get_rank_safe,
     get_world_size_safe,
-    is_rank_0,
     is_last_rank,
+    is_rank_0,
     print_rank_0,
     print_rank_last,
 )

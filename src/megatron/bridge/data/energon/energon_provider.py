@@ -54,9 +54,9 @@ class EnergonProvider(DatasetProvider):
     def build_datasets(self, context: DatasetBuildContext):
         resolved_path = self.path
         if self.cord_bin_id is not None and self.cord_bin_id != "":
-            assert (
-                self.cord_bins_root
-            ), "EnergonProvider.cord_bins_root must be set when dataset.cord_bin_id is provided."
+            assert self.cord_bins_root, (
+                "EnergonProvider.cord_bins_root must be set when dataset.cord_bin_id is provided."
+            )
             resolved_path = os.path.join(self.cord_bins_root, f"{self.cord_bin_prefix}{self.cord_bin_id}")
 
         assert resolved_path, "EnergonProvider.path must be set. Use CLI override: dataset.path=<path>"

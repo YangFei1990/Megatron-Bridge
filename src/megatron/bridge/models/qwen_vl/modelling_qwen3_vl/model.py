@@ -684,12 +684,8 @@ class Qwen3VLModel(MegatronModule):
                 total_len = input_ids.shape[1]
                 flat_ids = input_ids.squeeze(0)
 
-                sub_ids = torch.zeros(
-                    num_seqs, max_subseq_len, dtype=input_ids.dtype, device=input_ids.device
-                )
-                sub_mask = torch.zeros(
-                    num_seqs, max_subseq_len, dtype=torch.int32, device=input_ids.device
-                )
+                sub_ids = torch.zeros(num_seqs, max_subseq_len, dtype=input_ids.dtype, device=input_ids.device)
+                sub_mask = torch.zeros(num_seqs, max_subseq_len, dtype=torch.int32, device=input_ids.device)
                 for i, sl in enumerate(seq_lens):
                     start = int(cu[i].item())
                     sl_int = int(sl)
@@ -707,9 +703,7 @@ class Qwen3VLModel(MegatronModule):
                     attention_mask=sub_mask,
                 )  # [3, num_seqs, max_subseq_len]
 
-                packed_pos = torch.zeros(
-                    3, 1, total_len, dtype=position_ids.dtype, device=position_ids.device
-                )
+                packed_pos = torch.zeros(3, 1, total_len, dtype=position_ids.dtype, device=position_ids.device)
                 for i, sl in enumerate(seq_lens):
                     start = int(cu[i].item())
                     sl_int = int(sl)

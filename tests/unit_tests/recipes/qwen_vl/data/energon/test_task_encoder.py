@@ -31,8 +31,8 @@ from megatron.bridge.recipes.qwen_vl.data.energon.task_encoder import (
     _resolve_hf_mm_token_ids,
     convert_to_qwenvl_content,
     find_pattern_indices,
-    greedy_knapsack,
     get_ltor_masks_and_position_ids,
+    greedy_knapsack,
     process_vision,
     videohandler,
 )
