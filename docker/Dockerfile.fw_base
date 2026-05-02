@@ -319,10 +319,13 @@ ENV RDMA_CORE_HOME=/opt/rdma-core/build
 ENV LD_LIBRARY_PATH=/usr/local/cuda/lib64/:$LD_LIBRARY_PATH
 RUN --mount=type=bind,source=docker/patches/deepep.patch,target=/opt/deepep.patch \
     if [ "$INSTALL_DEEPEP" = "True" ]; then \
-    # Upgrade system rdma-core to v60 (EFA brings this when aws_ofi_builder runs; make it
-    # explicit so the DeepEP build works even when FW_NETWORK_LAYER=fw_dep_builder).
-    # libibverbs-dev supplies the unversioned libibverbs.so symlink required at link time.
-    apt-get update && apt-get install -y --allow-change-held-packages \
+    # Ensure rdma-core headers and libibverbs link-time symlink are present so DeepEP
+    # setup.py can find them via RDMA_CORE_HOME (needed on fw_dep_builder path where
+    # aws_ofi_builder / EFA installer did not run).
+    # Do NOT use --allow-change-held-packages: that flag lets apt downgrade libibverbs1
+    # and libmlx5-1 from the HPC-X/MLNX OFED versions pinned by aws_ofi_builder to the
+    # older ubuntu-repo version, which breaks the NCCL IB transport at runtime.
+    apt-get update && apt-get install -y \
         rdma-core libibverbs-dev && \
     apt-get clean && \
     ARCH_LIB=$(dpkg-architecture -qDEB_HOST_MULTIARCH) && \
