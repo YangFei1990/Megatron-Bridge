@@ -15,12 +15,7 @@
 import logging
 
 from megatron.core.models.gpt.gpt_model import GPTModel
-
-
-try:
-    from transformers import GlmMoeDsaForCausalLM
-except ImportError:
-    GlmMoeDsaForCausalLM = None
+from transformers import GlmMoeDsaForCausalLM
 
 from megatron.bridge.models.conversion.mapping_registry import MegatronMappingRegistry
 from megatron.bridge.models.conversion.model_bridge import MegatronModelBridge
@@ -36,12 +31,8 @@ from megatron.bridge.models.mla_provider import MLAModelProvider
 logger = logging.getLogger(__name__)
 
 
-@(
-    MegatronModelBridge.register_bridge(
-        source=GlmMoeDsaForCausalLM, target=GPTModel, provider=MLAModelProvider, model_type="glm_moe_dsa"
-    )
-    if GlmMoeDsaForCausalLM is not None
-    else lambda cls: cls
+@MegatronModelBridge.register_bridge(
+    source=GlmMoeDsaForCausalLM, target=GPTModel, provider=MLAModelProvider, model_type="glm_moe_dsa"
 )
 class GLM5Bridge(MegatronModelBridge):
     """

@@ -31,7 +31,6 @@ from megatron.bridge.models.conversion.param_mapping import (
 from megatron.bridge.models.deepseek import (
     DeepSeekV2Bridge,
     DeepSeekV3Bridge,
-    DeepSeekV4Bridge,
 )
 from megatron.bridge.models.gemma import (
     CodeGemmaModelProvider2B,
@@ -57,14 +56,9 @@ from megatron.bridge.models.gemma_vl import (
 from megatron.bridge.models.glm import (
     GLM45Bridge,
 )
-
-
-try:
-    from megatron.bridge.models.glm_moe_dsa import (
-        GLM5Bridge,
-    )
-except ImportError:
-    GLM5Bridge = None  # transformers too old; upgrade to >=5.0 for GlmMoeDsa support
+from megatron.bridge.models.glm_moe_dsa import (
+    GLM5Bridge,
+)
 from megatron.bridge.models.glm_vl import (
     GLM45VBridge,
     GLM45VModelProvider,
@@ -173,7 +167,6 @@ __all__ = [
     # DeepSeek Models
     "DeepSeekV2Bridge",
     "DeepSeekV3Bridge",
-    "DeepSeekV4Bridge",
     "Gemma3ModelProvider",
     "Gemma3ModelProvider1B",
     "Gemma3ModelProvider4B",
