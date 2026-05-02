@@ -493,7 +493,7 @@ class DeepSeekV4Bridge(MegatronModelBridge):
         )  # (M, K_logical), float32
 
         # E8M0 scale: value = 2^(e - 127), block_size = K_logical / K_scale = 32
-        scale_f32 = 2.0 ** (scale.to(torch.float32) - 127.0)  # (M, K_scale)
+        scale_f32 = scale.to(torch.float32)  # E8M0 .to(f32) already gives 2^(e-127)
         block_size = logical.shape[1] // scale_f32.shape[1]
         # repeat_interleave along dim=1 expands (M, K_scale) → (M, K_logical)
         scale_exp = scale_f32.repeat_interleave(block_size, dim=1)

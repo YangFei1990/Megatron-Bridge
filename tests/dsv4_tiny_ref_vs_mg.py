@@ -154,7 +154,7 @@ TINY_CONFIG = {
     "sliding_window": 16,
     "moe_intermediate_size": 256,
     "n_routed_experts": 8,
-    "num_experts_per_tok": 1,  # topk=1 avoids TE grouped_linear dispatch bug with topk>1
+    "num_experts_per_tok": 1,
     "n_shared_experts": 1,
     "hc_mult": 4,
     "hc_eps": 1e-6,
@@ -203,7 +203,7 @@ def create_ref_model():
     cfg = TINY_CONFIG
     args = ref_model.ModelArgs(
         max_batch_size=1,
-        max_seq_len=64,
+        max_seq_len=512,
         dtype="bf16",
         expert_dtype=None,
         vocab_size=cfg["vocab_size"],
@@ -245,8 +245,8 @@ def create_ref_model():
     m = ref_model.Transformer(args)
     # Default init may produce zeros — manually init all params
     with torch.no_grad():
-        for p in m.parameters():
-            if p.numel() > 0:
+        for name, p in m.named_parameters():
+            if p.numel() > 0 and p.is_floating_point() and "tid2eid" not in name:
                 p.normal_(0, 0.02)
     m.eval()
     return m, ref_model
