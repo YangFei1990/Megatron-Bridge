@@ -334,7 +334,7 @@ class DeepSeekV4Bridge(MegatronModelBridge):
         #   - compress_rope_theta for compressed-KV layers
         #   - rope_theta for pure sliding-window layers (layers 0,1)
         # Megatron uses a single rotary_base; we set it to the YaRN base.
-        provider.apply_rope_fusion = False
+        provider.apply_rope_fusion = True
         provider.rope_type = "yarn"
         provider.rotary_base = float(hf_config.rope_theta)  # 10000
         # Handle both transformers <5 (flat) and >=5 (nested 'main'/'compress') rope_scaling
