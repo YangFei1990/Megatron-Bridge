@@ -197,10 +197,14 @@ RUN apt-get update -y
 
 #################################################
 ## Remove existing EFA and aws-ofi-nccl only (preserve ibverbs/mlx5)
-## Purge old EFA packages so dpkg does a clean reinstall (rm -rf alone
-## leaves stale dpkg records and the installer skips reinstalling).
-RUN apt-get purge -y libfabric1-aws efa-profile libnccl-ofi 2>/dev/null || true && \
-    rm -rf /opt/amazon
+## Force-purge old EFA packages from dpkg so the installer does a clean
+## reinstall. apt-get purge cannot handle half-installed/broken states,
+## so use dpkg --force-all. Each command uses ; so later ones still run
+## even if earlier ones find nothing to remove.
+RUN dpkg --purge --force-all libfabric1-aws libfabric-aws-dev 2>/dev/null; \
+    apt-get purge -y efa-profile libnccl-ofi openmpi40-aws openmpi50-aws prrte-aws libpmix-aws 2>/dev/null; \
+    rm -rf /opt/amazon; \
+    true
 
 RUN DEBIAN_FRONTEND=noninteractive apt-get install -y --allow-unauthenticated \
     autoconf \
