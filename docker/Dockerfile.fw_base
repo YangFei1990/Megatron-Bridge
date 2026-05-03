@@ -197,7 +197,10 @@ RUN apt-get update -y
 
 #################################################
 ## Remove existing EFA and aws-ofi-nccl only (preserve ibverbs/mlx5)
-RUN rm -rf /opt/amazon
+## Purge old EFA packages so dpkg does a clean reinstall (rm -rf alone
+## leaves stale dpkg records and the installer skips reinstalling).
+RUN apt-get purge -y libfabric1-aws efa-profile libnccl-ofi 2>/dev/null || true && \
+    rm -rf /opt/amazon
 
 RUN DEBIAN_FRONTEND=noninteractive apt-get install -y --allow-unauthenticated \
     autoconf \
