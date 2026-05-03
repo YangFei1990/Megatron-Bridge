@@ -201,7 +201,7 @@ RUN apt-get update -y
 ## reinstall. apt-get purge cannot handle half-installed/broken states,
 ## so use dpkg --force-all. Each command uses ; so later ones still run
 ## even if earlier ones find nothing to remove.
-RUN dpkg --purge --force-all libfabric1-aws libfabric-aws-dev 2>/dev/null; \
+RUN dpkg --purge --force-all libfabric1-aws libfabric-aws-dev libfabric-aws-bin 2>/dev/null; \
     apt-get purge -y efa-profile libnccl-ofi openmpi40-aws openmpi50-aws prrte-aws libpmix-aws 2>/dev/null; \
     rm -rf /opt/amazon; \
     true
