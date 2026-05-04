@@ -109,7 +109,7 @@ def llama31_405b_pretrain_config_gb200(
     cfg.comm_overlap.tp_comm_overlap_cfg = comm_overlap_cfg
     cfg.comm_overlap.tp_comm_overlap = False if precision == "nvfp4" else cfg.comm_overlap.tp_comm_overlap
 
-    cfg.mixed_precision.fp4_param_gather = True
+    cfg.mixed_precision.fp4_param_gather = False
 
     return cfg
 
