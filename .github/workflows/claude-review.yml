@@ -87,7 +87,14 @@ jobs:
             - A base config `<MODEL>_..._<GPU>_<PRECISION>_V<N>` impacts that precision,
               plus any V<N+1> / LARGE_SCALE configs derived from it via `replace(...)`.
 
-            Each bullet should be a glob, e.g. `qwen3_235b_a22b_*gpu_b300_{bf16,fp8_mx,nvfp4}_*_perf`.
+            Each bullet must be an explicit test case name — do NOT use globs
+            or brace expansion. Enumerate every relevant combination, e.g.
+            `qwen3_235b_a22b_512gpu_b300_bf16_perf`,
+            `qwen3_235b_a22b_512gpu_b300_fp8_cs_perf`,
+            `qwen3_235b_a22b_512gpu_b300_fp8_mx_perf`,
+            `qwen3_235b_a22b_512gpu_b300_nvfp4_perf`. Discover the exact names
+            by grepping the diff and the `scripts/performance/configs/` tree
+            for the affected model/GPU/precision combinations.
             If no perf/recipe configs are touched, write "No perf tests impacted."
 
             End the review by posting it as a top-level PR comment:
@@ -140,7 +147,14 @@ jobs:
         - A base config `<MODEL>_..._<GPU>_<PRECISION>_V<N>` impacts that precision,
           plus any V<N+1> / LARGE_SCALE configs derived from it via `replace(...)`.
 
-        Each bullet should be a glob, e.g. `qwen3_235b_a22b_*gpu_b300_{bf16,fp8_mx,nvfp4}_*_perf`.
+        Each bullet must be an explicit test case name — do NOT use globs
+        or brace expansion. Enumerate every relevant combination, e.g.
+        `qwen3_235b_a22b_512gpu_b300_bf16_perf`,
+        `qwen3_235b_a22b_512gpu_b300_fp8_cs_perf`,
+        `qwen3_235b_a22b_512gpu_b300_fp8_mx_perf`,
+        `qwen3_235b_a22b_512gpu_b300_nvfp4_perf`. Discover the exact names
+        by grepping the diff and the `scripts/performance/configs/` tree
+        for the affected model/GPU/precision combinations.
         If no perf/recipe configs are touched, write "No perf tests impacted."
 
         End the review by posting it as a top-level PR comment:
