@@ -142,8 +142,7 @@ RUN bash docker/common/install_base.sh && \
     bash docker/common/install_ccache.sh
 
 ARG TARGET_ARCH
-RUN if [ "$TARGET_ARCH" = "arm" ]; then JOB_COUNT=8; else JOB_COUNT=16; fi && \
-    python3 scripts/build_wheel.py --job_count $JOB_COUNT ${BUILD_WHEEL_ARGS}
+RUN python3 scripts/build_wheel.py --job_count 8 ${BUILD_WHEEL_ARGS}
 
 ##############################################################################
 ##
