@@ -20,46 +20,46 @@ and their Megatron equivalents, supporting both text-only and vision-language mo
 
 Run Script Examples:
     # Regular LLM comparison between HF and Megatron models:
-    python examples/conversion/compare_hf_and_megatron/compare.py \
+    uv run python examples/conversion/compare_hf_and_megatron/compare.py \
         --hf_model_path "Qwen/Qwen3-1.7B" \
         --prompt "Hello, how are you?"
 
 
     # Vision-language comparison with image from URL:
-    python examples/conversion/compare_hf_and_megatron/compare.py \
+    uv run python examples/conversion/compare_hf_and_megatron/compare.py \
         --hf_model_path "Qwen/Qwen2.5-VL-3B-Instruct" \
         --model_class "Qwen2_5_VLForConditionalGeneration" \
         --image_path "https://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen-VL/assets/demo.jpeg" \
         --prompt "Describe this image."
 
     # Vision-language comparison with local image:
-    python examples/conversion/compare_hf_and_megatron/compare.py \
+    uv run python examples/conversion/compare_hf_and_megatron/compare.py \
         --hf_model_path "Qwen/Qwen2.5-VL-3B-Instruct" \
         --model_class "Qwen2_5_VLForConditionalGeneration" \
         --image_path "/path/to/local/image.jpg" \
         --prompt "What do you see in this image?"
 
     # Multi-GPU comparison with tensor parallelism (regular LLM):
-    torchrun --nproc_per_node=2 examples/conversion/compare_hf_and_megatron/compare.py \
+    uv run python -m torch.distributed.run --nproc_per_node=2 examples/conversion/compare_hf_and_megatron/compare.py \
         --hf_model_path "Qwen/Qwen3-1.7B" \
         --prompt "Hello world" \
         --tp 2
 
     # Pipeline parallel comparison (VL model):
-    torchrun --nproc_per_node=2 examples/conversion/compare_hf_and_megatron/compare.py \
+    uv run python -m torch.distributed.run --nproc_per_node=2 examples/conversion/compare_hf_and_megatron/compare.py \
         --hf_model_path "Qwen/Qwen2.5-VL-3B-Instruct" \
         --model_class "Qwen2_5_VLForConditionalGeneration" \
         --prompt "Hello world" \
         --pp 2
 
     # Compare with pre-converted Megatron checkpoint:
-    python examples/conversion/compare_hf_and_megatron/compare.py \
+    uv run python examples/conversion/compare_hf_and_megatron/compare.py \
         --hf_model_path "Qwen/Qwen3-1.7B" \
         --megatron_model_path "/path/to/megatron/checkpoint" \
         --prompt "Hello world"
 
     # Enable debug hooks to inspect forward pass intermediate results:
-    python examples/conversion/compare_hf_and_megatron/compare.py \
+    uv run python examples/conversion/compare_hf_and_megatron/compare.py \
         --hf_model_path "Qwen/Qwen3-1.7B" \
         --prompt "Hello world" \
         --enable_debug_hooks
@@ -91,6 +91,7 @@ Output:
 """
 
 import argparse
+import gc
 import importlib
 import os
 import sys
@@ -110,16 +111,22 @@ try:
 except ImportError:
     QWEN_VL_UTILS_AVAILABLE = False
     process_vision_info = None
+import io
 import os
 
 # Import debugger module from same directory
 import sys
 
-import requests
 from PIL import Image
 
 from megatron.bridge import AutoBridge
-from megatron.bridge.utils.common_utils import get_last_rank, print_rank_0
+from megatron.bridge.models.hf_pretrained.utils import is_safe_repo
+from megatron.bridge.utils.common_utils import disable_mtp_for_inference, get_last_rank, print_rank_0
+from megatron.bridge.utils.safe_url import is_safe_public_http_url, safe_url_open
+
+
+# Cosine similarity threshold: require at least 98% similarity (2% tolerance)
+SIMILARITY_THRESHOLD = 0.98
 
 
 sys.path.append(os.path.dirname(__file__))
@@ -203,7 +210,7 @@ def get_model_class(model_class_name: str = None, is_vl_model: bool = False):
         return AutoModelForCausalLM
 
 
-def is_vision_language_model(model_path: str) -> bool:
+def is_vision_language_model(model_path: str, trust_remote_code: bool | None = None) -> bool:
     """Check if the model is a vision-language model.
 
     Args:
@@ -213,7 +220,13 @@ def is_vision_language_model(model_path: str) -> bool:
         True if the model supports vision inputs, False otherwise
     """
     try:
-        config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
+        config = AutoConfig.from_pretrained(
+            model_path,
+            trust_remote_code=is_safe_repo(
+                trust_remote_code=trust_remote_code,
+                hf_path=model_path,
+            ),
+        )
 
         # Check for VL model indicators in config
         model_type = getattr(config, "model_type", "").lower()
@@ -307,7 +320,13 @@ def vlm_forward_step(data_iterator, model, **kwargs) -> torch.Tensor:
     def loss_func(x, **kwargs):
         return x
 
-    return model(**forward_args), loss_func
+    model_output = model(**forward_args)
+    if isinstance(model_output, tuple):
+        output_tensor, _ = model_output
+    else:
+        output_tensor = model_output
+
+    return output_tensor, loss_func
 
 
 def load_image(image_path: str) -> Image.Image:
@@ -320,14 +339,40 @@ def load_image(image_path: str) -> Image.Image:
         PIL Image object
     """
     if image_path.startswith(("http://", "https://")):
-        response = requests.get(image_path)
-        response.raise_for_status()
-        return Image.open(requests.get(image_path, stream=True).raw)
-    else:
-        return Image.open(image_path)
+        is_safe, reason = is_safe_public_http_url(image_path)
+        if not is_safe:
+            raise ValueError(f"Refusing to fetch image URL ({reason}): {image_path}")
+        with safe_url_open(image_path) as resp:
+            return Image.open(io.BytesIO(resp.read()))
+    return Image.open(image_path)
 
 
-def process_inputs(tokenizer, processor, image_path: Optional[str], prompt: str, is_vl_model: bool):
+def pad_input_ids_to_tp_multiple(input_ids, tp_size: int, pad_token_id: int = 0):
+    """Pad input_ids so sequence length is divisible by tp_size.
+
+    this is needed for sequence parallel, which is required for moe models
+    when using tensor parallel and expert parallel together.
+
+    Args:
+        input_ids: Input token IDs tensor
+        tp_size: Tensor parallel size
+        pad_token_id: Token ID to use for padding
+
+    Returns:
+        Padded input_ids tensor
+    """
+    seq_len = input_ids.shape[1]
+    remainder = seq_len % tp_size
+    if remainder != 0:
+        pad_len = tp_size - remainder
+        padding = torch.full(
+            (input_ids.shape[0], pad_len), pad_token_id, dtype=input_ids.dtype, device=input_ids.device
+        )
+        input_ids = torch.cat([input_ids, padding], dim=1)
+    return input_ids
+
+
+def process_inputs(tokenizer, processor, image_path: Optional[str], prompt: str, is_vl_model: bool, tp_size: int = 1):
     """Process inputs for both vision-language and regular LLM models.
 
     Args:
@@ -336,6 +381,7 @@ def process_inputs(tokenizer, processor, image_path: Optional[str], prompt: str,
         image_path: Path or URL to the image (optional)
         prompt: Text prompt
         is_vl_model: Whether the model is a vision-language model
+        tp_size: Tensor parallel size for padding sequence length
 
     Returns:
         Tuple of (input_ids, pixel_values, image_grid_thw, messages)
@@ -370,7 +416,8 @@ def process_inputs(tokenizer, processor, image_path: Optional[str], prompt: str,
             return_tensors="pt",
         )
 
-        return inputs.input_ids, inputs.pixel_values, inputs.image_grid_thw, messages
+        input_ids = pad_input_ids_to_tp_multiple(inputs.input_ids, tp_size, tokenizer.pad_token_id or 0)
+        return input_ids, inputs.pixel_values, inputs.image_grid_thw, messages
     else:
         # Text-only processing for both VL models without images and regular LLMs
         if is_vl_model and processor:
@@ -379,7 +426,8 @@ def process_inputs(tokenizer, processor, image_path: Optional[str], prompt: str,
         else:
             # Use tokenizer for regular LLMs
             inputs = tokenizer(prompt, return_tensors="pt")
-        return inputs.input_ids, None, None, None
+        input_ids = pad_input_ids_to_tp_multiple(inputs.input_ids, tp_size, tokenizer.pad_token_id or 0)
+        return input_ids, None, None, None
 
 
 def _load_hf_model(args, is_vl_model: bool):
@@ -398,7 +446,13 @@ def _load_hf_model(args, is_vl_model: bool):
     print_rank_0("Loading HuggingFace model...")
     model_class = get_model_class(args.model_class, is_vl_model)
     hf_model = model_class.from_pretrained(
-        args.hf_model_path, torch_dtype=torch.bfloat16, device_map="cuda", trust_remote_code=True
+        args.hf_model_path,
+        torch_dtype=torch.bfloat16,
+        device_map="cuda",
+        trust_remote_code=is_safe_repo(
+            trust_remote_code=args.trust_remote_code,
+            hf_path=args.hf_model_path,
+        ),
     )
     hf_model = hf_model.eval()
     print_rank_0(f"Loaded with {model_class.__name__}")
@@ -410,6 +464,50 @@ def _load_hf_model(args, is_vl_model: bool):
         print_rank_0("HuggingFace debug hooks registered.")
 
     return hf_model
+
+
+def _export_and_load_roundtrip_hf_model(args, is_vl_model: bool, megatron_model, bridge):
+    """Export HF weights from Megatron model, save, and load exported HF model for comparison.
+
+    Returns:
+        Exported HF model loaded from disk (rank 0) or None (non-rank-0).
+    """
+    print_rank_0("Performing HF round-trip export from Megatron model...")
+    model_name = args.hf_model_path.split("/")[-1]
+    parent_dir = args.exported_hf_dir if args.exported_hf_dir else "."
+    save_path = os.path.join(parent_dir, f"{model_name}_roundtrip")
+
+    if _is_rank_0():
+        print_rank_0(f"Exporting HF checkpoint to: {save_path}")
+    # Quick verification of exported weights against original HF weights (rank 0 summary)
+    matches = 0
+    mismatches = 0
+    for name, param in bridge.export_hf_weights(megatron_model, show_progress=False):
+        if _is_rank_0():
+            original_param = bridge.hf_pretrained.state[name]
+            if torch.allclose(param, original_param.to(param.device), atol=1e-1):
+                matches += 1
+            else:
+                mismatches += 1
+    if _is_rank_0():
+        print_rank_0(f"Export verification - matches: {matches}, mismatches: {mismatches}")
+
+    # Save exported HF checkpoint
+    bridge.save_hf_pretrained(megatron_model, save_path)
+
+    # Load exported HF model only on rank 0
+    if _is_rank_0():
+        print_rank_0("Loading exported HF model for comparison...")
+        model_class = get_model_class(args.model_class, is_vl_model)
+        hf_model = model_class.from_pretrained(
+            save_path, torch_dtype=torch.bfloat16, device_map="cuda", trust_remote_code=True
+        ).eval()
+        if args.enable_debug_hooks:
+            print_rank_0("Registering debug hooks for exported HF model...")
+            debugger.register_hooks(hf_model, file_prefix="hf_debug_")
+            print_rank_0("Exported HF debug hooks registered.")
+        return hf_model
+    return None
 
 
 def _run_hf_inference(hf_model, input_ids, pixel_values, image_grid_thw, tokenizer):
@@ -476,7 +574,7 @@ def _load_megatron_model(args):
         args: Command line arguments.
 
     Returns:
-        List of Megatron model components.
+        Tuple of (List of Megatron model components, bridge).
     """
     print_rank_0("Loading Megatron model...")
     tp, pp, ep, etp = args.tp, args.pp, args.ep, args.etp
@@ -504,7 +602,13 @@ def _load_megatron_model(args):
         )
     else:
         # Convert from HF to Megatron
-        bridge = AutoBridge.from_hf_pretrained(args.hf_model_path, trust_remote_code=True)
+        bridge = AutoBridge.from_hf_pretrained(
+            args.hf_model_path,
+            trust_remote_code=is_safe_repo(
+                trust_remote_code=args.trust_remote_code,
+                hf_path=args.hf_model_path,
+            ),
+        )
         model_provider = bridge.to_megatron_provider(load_weights=True)
         model_provider.tensor_model_parallel_size = tp
         model_provider.pipeline_model_parallel_size = pp
@@ -512,10 +616,13 @@ def _load_megatron_model(args):
         model_provider.expert_tensor_parallel_size = etp
         model_provider.pipeline_dtype = torch.bfloat16
         model_provider.finalize()
-        model_provider.initialize_model_parallel(seed=0)
         megatron_model = model_provider.provide_distributed_model(wrap_with_ddp=False)
 
-    model_components = [m.cuda().eval() for m in megatron_model]
+    # Workaround: disable MTP for inference (causes hangs on NCCL collectives)
+    for m in megatron_model:
+        disable_mtp_for_inference(m)
+
+    model_components = [m.eval() for m in megatron_model]
 
     # Register debug hooks if enabled
     if args.enable_debug_hooks:
@@ -524,7 +631,7 @@ def _load_megatron_model(args):
             debugger.register_hooks(model_component, file_prefix=f"megatron_debug_component_{i}_")
         print_rank_0("Megatron debug hooks registered.")
 
-    return model_components
+    return model_components, bridge
 
 
 def _setup_tokenizer_and_processor(args, is_vl_model: bool):
@@ -537,14 +644,26 @@ def _setup_tokenizer_and_processor(args, is_vl_model: bool):
     Returns:
         Tuple of (tokenizer, processor).
     """
-    tokenizer = AutoTokenizer.from_pretrained(args.hf_model_path, trust_remote_code=True)
+    tokenizer = AutoTokenizer.from_pretrained(
+        args.hf_model_path,
+        trust_remote_code=is_safe_repo(
+            trust_remote_code=args.trust_remote_code,
+            hf_path=args.hf_model_path,
+        ),
+    )
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
     processor = None
     if is_vl_model:
         try:
-            processor = AutoProcessor.from_pretrained(args.hf_model_path, trust_remote_code=True)
+            processor = AutoProcessor.from_pretrained(
+                args.hf_model_path,
+                trust_remote_code=is_safe_repo(
+                    trust_remote_code=args.trust_remote_code,
+                    hf_path=args.hf_model_path,
+                ),
+            )
         except Exception as e:
             print_rank_0(f"Warning: Could not load processor for VL model: {e}")
             print_rank_0("Falling back to tokenizer-only mode")
@@ -560,8 +679,13 @@ def compare_models_one_step(args) -> None:
     """
     print_rank_0("=== STARTING MODEL COMPARISON (1-STEP) ===")
 
+    if torch.cuda.is_available():
+        local_rank = int(os.environ.get("LOCAL_RANK", 0))
+        torch.cuda.set_device(local_rank)
+        print_rank_0(f"Set CUDA device to: {torch.cuda.current_device()}")
+
     # Detect model type
-    is_vl_model = is_vision_language_model(args.hf_model_path)
+    is_vl_model = is_vision_language_model(args.hf_model_path, args.trust_remote_code)
     print_rank_0(f"Detected model type: {'Vision-Language' if is_vl_model else 'Text-only LLM'}")
 
     # Validate vision requirements
@@ -569,11 +693,15 @@ def compare_models_one_step(args) -> None:
         print_rank_0("Warning: Image provided but model is not a vision-language model. Ignoring image.")
         args.image_path = None
 
-    # Load HF model
-    hf_model = _load_hf_model(args, is_vl_model)
+    # Load Megatron model (and bridge)
+    megatron_model, bridge = _load_megatron_model(args)
 
-    # Load Megatron model
-    megatron_model = _load_megatron_model(args)
+    # Optionally perform HF round-trip export and use exported HF model for comparison
+    if getattr(args, "roundtrip_hf", False):
+        hf_model = _export_and_load_roundtrip_hf_model(args, is_vl_model, megatron_model, bridge)
+    else:
+        # Load HF model directly from the hub/path
+        hf_model = _load_hf_model(args, is_vl_model)
 
     # Setup tokenizer and processor
     tokenizer, processor = _setup_tokenizer_and_processor(args, is_vl_model)
@@ -581,7 +709,7 @@ def compare_models_one_step(args) -> None:
     # Process inputs
     print_rank_0(f"Processing inputs - Prompt: '{args.prompt}', Image: {args.image_path}")
     input_ids, pixel_values, image_grid_thw, messages = process_inputs(
-        tokenizer, processor, args.image_path, args.prompt, is_vl_model
+        tokenizer, processor, args.image_path, args.prompt, is_vl_model, args.tp
     )
 
     # Move to GPU
@@ -599,9 +727,17 @@ def compare_models_one_step(args) -> None:
         hf_model, input_ids, pixel_values, image_grid_thw, tokenizer
     )
 
-    # Broadcast HF results to all ranks after Megatron initialization
-    # (following the pattern from generate_from_hf.py)
+    del hf_model
+    gc.collect()
+    torch.cuda.empty_cache()
+
+    # Broadcast HF results to all ranks
     if torch.distributed.is_initialized():
+        # Ensure consistent dtype across ranks: rank 0 has bfloat16 logits from the HF model,
+        # so all ranks must use the same dtype for NCCL broadcast to work correctly.
+        if hf_logits is not None:
+            hf_logits = hf_logits.float()
+
         # Create tensors for broadcasting if they don't exist on non-rank-0
         if hf_next_token is None:
             hf_next_token = torch.zeros(1, device=input_ids.device, dtype=torch.long)
@@ -610,11 +746,16 @@ def compare_models_one_step(args) -> None:
             vocab_size = getattr(
                 tokenizer, "vocab_size", len(tokenizer.vocab) if hasattr(tokenizer, "vocab") else 32000
             )
-            hf_logits = torch.zeros(vocab_size, device=input_ids.device, dtype=torch.bfloat16)
+            hf_logits = torch.zeros(vocab_size, device=input_ids.device, dtype=torch.float32)
+
+        # Ensure consistent dtype across ranks before broadcast
+        hf_logits = hf_logits.float()
 
         # Broadcast from rank 0 to all ranks
         torch.distributed.broadcast(hf_next_token, 0)
         torch.distributed.broadcast(hf_logits, 0)
+        torch.distributed.barrier()
+        print_rank_0("HF results broadcast complete.")
 
     # Run Megatron model forward pass
     print_rank_0("=== RUNNING MEGATRON MODEL (1-STEP) ===")
@@ -624,7 +765,12 @@ def compare_models_one_step(args) -> None:
             .unsqueeze(0)
             .expand_as(input_ids)
         )
-        attention_mask = torch.ones_like(input_ids, dtype=torch.bool)
+        # Megatron-Core convention: True in attention_mask means "mask OUT this token"
+        # (opposite of HuggingFace where True means "attend to this token").
+        # Passing None lets Megatron auto-generate the correct causal mask internally,
+        # which is the standard approach used throughout the codebase
+        # (see: qwenvl_inference_wrapper.py, vlm_step.py, sft.py).
+        attention_mask = None
 
         fwd_bwd_function = get_forward_backward_func()
         iterator = SingleBatchIterator(input_ids, position_ids, attention_mask, pixel_values, image_grid_thw)
@@ -659,7 +805,10 @@ def compare_models_one_step(args) -> None:
             megatron_logits = megatron_output[0, -1, :]
             megatron_next_token = torch.argmax(megatron_logits, dim=-1)
 
-            if not torch.distributed.is_initialized() or parallel_state.get_tensor_model_parallel_rank() == 0:
+            if not torch.distributed.is_initialized() or (
+                parallel_state.get_tensor_model_parallel_rank() == 0
+                and parallel_state.get_expert_model_parallel_rank() == 0
+            ):
                 print(f"Megatron output shape: {megatron_output.shape}")
                 print(f"Megatron logits stats - mean: {megatron_logits.mean():.4f}, std: {megatron_logits.std():.4f}")
                 print(
@@ -671,19 +820,26 @@ def compare_models_one_step(args) -> None:
                 top5_tokens = [tokenizer.decode([idx]) for idx in top5_ids]
                 print(f"Megatron Top 5: {list(zip(top5_tokens, top5_vals.tolist()))}")
 
+                # Megatron may pad vocab_size for GPU kernel efficiency — truncate
+                # to the HF vocab size so logits are directly comparable.
+                hf_vocab_size = hf_logits.shape[0]
+                megatron_logits_cmp = megatron_logits[:hf_vocab_size]
+                megatron_next_token_cmp = torch.argmax(megatron_logits_cmp, dim=-1)
+
                 # Compare outputs (only where we have valid Megatron results)
                 print("=== COMPARISON ===")
-                print(f"Token match: {hf_next_token.item() == megatron_next_token.item()}")
+                token_match = hf_next_token.item() == megatron_next_token_cmp.item()
+                token_status_emoji = "✅" if token_match else "❌"
+                print(f"Token match: {token_match} {token_status_emoji}")
 
-                # Compare logits if shapes match
-                if hf_logits.shape == megatron_logits.shape:
-                    diff = (hf_logits - megatron_logits).abs()
-                    print(f"Logits diff - max: {diff.max():.6f}, mean: {diff.mean():.6f}")
-                    cosine_sim = torch.cosine_similarity(hf_logits.unsqueeze(0), megatron_logits.unsqueeze(0))
-                    print(f"Cosine similarity: {cosine_sim.item():.6f}")
-                else:
-                    print(f"Shape mismatch: HF {hf_logits.shape} vs Megatron {megatron_logits.shape}")
-                    print("Cannot compare logits directly due to shape mismatch")
+                diff = (hf_logits - megatron_logits_cmp).abs()
+                print(f"Logits diff - max: {diff.max():.6f}, mean: {diff.mean():.6f}")
+                cosine_sim = torch.cosine_similarity(hf_logits.unsqueeze(0), megatron_logits_cmp.unsqueeze(0))
+                cos_val = cosine_sim.item()
+                percent = cos_val * 100.0
+                status_emoji = "✅" if cos_val >= SIMILARITY_THRESHOLD else "❌"
+                tolerance_text = "within ±2%" if cos_val >= SIMILARITY_THRESHOLD else "outside ±2%"
+                print(f"Cosine similarity: {cos_val:.6f} ({percent:.2f}%) {status_emoji} ({tolerance_text} tolerance)")
 
                 print("=== COMPARISON COMPLETE ===")
         else:
@@ -731,6 +887,18 @@ if __name__ == "__main__":
         action="store_true",
         help="Enable debug hooks to log forward pass information for both HF and Megatron models to JSONL files",
     )
+    parser.add_argument(
+        "--roundtrip_hf",
+        action="store_true",
+        help="Export HF weights from the Megatron model and compare using the exported HF model instead of the original.",
+    )
+    parser.add_argument(
+        "--exported_hf_dir",
+        type=str,
+        default=None,
+        help="Directory where the exported HF model will be saved during round-trip. Defaults to current directory.",
+    )
+    parser.add_argument("--trust_remote_code", action="store_true", help="if trust_remote_code")
 
     args = parser.parse_args()
 

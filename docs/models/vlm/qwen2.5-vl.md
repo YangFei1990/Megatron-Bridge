@@ -20,7 +20,7 @@ Unless explicitly stated, any megatron model path in the commands below should N
 ### Import HF → Megatron
 To import the HF model to your desired `$MEGATRON_MODEL_PATH`, run the following command.
 ```bash
-python examples/conversion/convert_checkpoints.py import \
+uv run python examples/conversion/convert_checkpoints.py import \
 --hf-model $HF_MODEL_PATH \
 --megatron-path $MEGATRON_MODEL_PATH
 ```
@@ -28,7 +28,7 @@ python examples/conversion/convert_checkpoints.py import \
 ### Export Megatron → HF
 You can export a trained model with the following command.
 ```bash
-python examples/conversion/convert_checkpoints.py export \
+uv run python examples/conversion/convert_checkpoints.py export \
 --hf-model $HF_MODEL_PATH \
 --megatron-path <trained megatron model path> \
 --hf-path <output hf model path>
@@ -37,7 +37,7 @@ python examples/conversion/convert_checkpoints.py export \
 ### Run In-Framework Inference on Converted Checkpoint
 You can run a quick sanity check on the converted checkpoint with the following command.
 ```bash
-python examples/conversion/hf_to_megatron_generate_vlm.py \
+uv run python examples/conversion/hf_to_megatron_generate_vlm.py \
 --hf_model_path $HF_MODEL_PATH \
 --megatron_model_path $MEGATRON_MODEL_PATH \
 --image_path <example image path> \
@@ -64,7 +64,7 @@ Before training, ensure the following environment variables are set.
 Example usage for full parameter finetuning:
 
 ```bash
-torchrun --nproc-per-node=8 examples/recipes/qwen_vl/finetune_qwen25_vl.py \
+uv run python -m torch.distributed.run --nproc-per-node=8 examples/models/vlm/qwen_vl/finetune_qwen25_vl.py \
 --pretrained-checkpoint $MEGATRON_MODEL_PATH \
 --recipe qwen25_vl_3b_finetune_config \
 --dataset-type hf \
@@ -82,7 +82,7 @@ Note:
   - `qwen25_vl_7b_finetune_config` - for 7B model  
   - `qwen25_vl_32b_finetune_config` - for 32B model
   - `qwen25_vl_72b_finetune_config` - for 72B model
-- The config file `examples/recipes/qwen_vl/conf/qwen25_vl_pretrain_override_example.yaml` contains a list of arguments 
+- The config file `examples/models/vlm/qwen_vl/conf/qwen25_vl_pretrain_override_example.yaml` contains a list of arguments 
   that can be overridden in the command. For example, you can set `train.global_batch_size=<batch size>` in the command. 
 - The dataset format should be JSONL with conversation format (see dataset section below).
 - After training, you can run inference with `hf_to_megatron_generate_vlm.py` by supplying the trained megatron checkpoint. 
@@ -92,7 +92,7 @@ Note:
 Parameter-efficient finetuning (PEFT) using LoRA or DoRA is supported. You can use the `--peft_scheme` argument to enable PEFT training:
 
 ```bash
-torchrun --nproc-per-node=8 examples/recipes/qwen_vl/finetune_qwen25_vl.py \
+uv run python -m torch.distributed.run --nproc-per-node=8 examples/models/vlm/qwen_vl/finetune_qwen25_vl.py \
 --pretrained-checkpoint $MEGATRON_MODEL_PATH \
 --recipe qwen25_vl_3b_finetune_config \
 --peft_scheme lora \
@@ -112,7 +112,7 @@ You can also combine PEFT with freeze options to control which components are tr
 
 Example with LoRA and freeze options:
 ```bash
-torchrun --nproc-per-node=8 examples/recipes/qwen_vl/finetune_qwen25_vl.py \
+uv run python -m torch.distributed.run --nproc-per-node=8 examples/models/vlm/qwen_vl/finetune_qwen25_vl.py \
 --pretrained-checkpoint $MEGATRON_MODEL_PATH \
 --recipe qwen25_vl_3b_finetune_config \
 --peft_scheme lora \

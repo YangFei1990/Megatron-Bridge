@@ -133,6 +133,7 @@ class TestApplyDeepEP:
         # Mock Volta GPU (compute capability 7.x)
         mock_properties = MagicMock()
         mock_properties.major = 7
+        mock_properties.name = "NVIDIA V100"
         mock_get_device_properties.return_value = mock_properties
 
         # Create a mock TransformerConfig with MoE enabled
@@ -145,7 +146,8 @@ class TestApplyDeepEP:
         # Verify warning was logged
         mock_logger.warning.assert_called_once()
         assert (
-            "DeepEP is only applicable to Ampere (SM80) and Hopper (SM90) GPUs" in mock_logger.warning.call_args[0][0]
+            "DeepEP is only applicable to Ampere, Hopper, and Blackwell (B200/B300) GPUs"
+            in mock_logger.warning.call_args[0][0]
         )
 
         # Verify configs were NOT set
@@ -161,6 +163,7 @@ class TestApplyDeepEP:
         # Mock Pascal GPU (compute capability 6.x)
         mock_properties = MagicMock()
         mock_properties.major = 6
+        mock_properties.name = "NVIDIA P100"
         mock_get_device_properties.return_value = mock_properties
 
         # Create a mock TransformerConfig with MoE enabled
@@ -173,7 +176,8 @@ class TestApplyDeepEP:
         # Verify warning was logged
         mock_logger.warning.assert_called_once()
         assert (
-            "DeepEP is only applicable to Ampere (SM80) and Hopper (SM90) GPUs" in mock_logger.warning.call_args[0][0]
+            "DeepEP is only applicable to Ampere, Hopper, and Blackwell (B200/B300) GPUs"
+            in mock_logger.warning.call_args[0][0]
         )
 
         # Verify configs were NOT set
@@ -247,6 +251,7 @@ class TestValidateDeepEP:
         # Mock Volta GPU (compute capability 7.x)
         mock_properties = MagicMock()
         mock_properties.major = 7
+        mock_properties.name = "NVIDIA V100"
         mock_get_device_properties.return_value = mock_properties
 
         # Create a mock TransformerConfig with DeepEP enabled
@@ -255,7 +260,10 @@ class TestValidateDeepEP:
         config.moe_token_dispatcher_type = "flex"
 
         # Should raise ValueError
-        with pytest.raises(ValueError, match="DeepEP is supported for Ampere \\(SM80\\) and Hopper \\(SM90\\) GPUs"):
+        with pytest.raises(
+            ValueError,
+            match="DeepEP is supported for Ampere, Hopper, and Blackwell \\(B200/B300\\) GPUs",
+        ):
             validate_flex_dispatcher_backend(config)
 
         # Verify get_device_properties was called
@@ -267,6 +275,7 @@ class TestValidateDeepEP:
         # Mock future GPU
         mock_properties = MagicMock()
         mock_properties.major = 200
+        mock_properties.name = "NVIDIA Future GPU"
         mock_get_device_properties.return_value = mock_properties
 
         # Create a mock TransformerConfig with DeepEP enabled
@@ -332,11 +341,11 @@ class TestValidateHybridEP:
 
     @patch("torch.cuda.get_device_properties")
     def test_validate_flex_dispatcher_backend_future_gpu_raises_error(self, mock_get_device_properties):
-        """Test that validate_flex_dispatcher_backend raises ValueError on non GB200 or GB300 when HybridEP is enabled."""
+        """Test that validate_flex_dispatcher_backend raises ValueError on unsupported GPU when HybridEP is enabled."""
         # Mock future GPU
         mock_properties = MagicMock()
-        mock_properties.major = 10
-        mock_properties.name = "NVIDIA B200"
+        mock_properties.major = 11
+        mock_properties.name = "NVIDIA X200"
         mock_get_device_properties.return_value = mock_properties
 
         # Create a mock TransformerConfig with DeepEP enabled
@@ -345,7 +354,10 @@ class TestValidateHybridEP:
         config.moe_token_dispatcher_type = "flex"
 
         # Should raise ValueError
-        with pytest.raises(ValueError, match="HybridEP is supported for GB200 or GB300 GPUs with NVL72"):
+        with pytest.raises(
+            ValueError,
+            match="HybridEP is supported for GB200, GB300 with NVL72 and for Ampere, Hopper, B200 and B300 GPUs",
+        ):
             validate_flex_dispatcher_backend(config)
 
         # Verify get_device_properties was called
