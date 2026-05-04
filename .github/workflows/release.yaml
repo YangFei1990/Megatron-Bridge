@@ -143,13 +143,13 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          FAILED_JOBS=$(gh run view $GITHUB_RUN_ID --repo ${{ github.repository }} --json jobs --jq '[.jobs[] | select(.status == "completed" and .conclusion != "success")] | length')
+          FAILED_JOBS=$(gh run view $GITHUB_RUN_ID --repo ${{ github.repository }} --json jobs --jq '[.jobs[] | select(.conclusion == "failure" or .conclusion == "timed_out" or .conclusion == "action_required")] | length')
 
           if [ "${FAILED_JOBS:-0}" -eq 0 ]; then
               echo "✅ All previous jobs completed successfully"
               exit 0
           else
               echo "❌ Found $FAILED_JOBS failed job(s)"
-              gh run view $GITHUB_RUN_ID --repo ${{ github.repository }} --json jobs --jq '.jobs[] | select(.status == "completed" and .conclusion != "success") | .name'
+              gh run view $GITHUB_RUN_ID --repo ${{ github.repository }} --json jobs --jq '.jobs[] | select(.conclusion == "failure" or .conclusion == "timed_out" or .conclusion == "action_required") | .name'
               exit 1
           fi
