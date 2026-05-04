@@ -232,6 +232,8 @@ class NemotronHBridge(MegatronModelBridge):
         >>> provider = bridge.to_megatron_provider()
     """
 
+    # Extend CONFIG_MAPPING with Nemotron-H/Mamba-specific fields
+    # Common bidirectional config field name mapping: (hf_name, megatron_name)
     CONFIG_MAPPING = MegatronModelBridge.CONFIG_MAPPING + [
         # Mamba-specific fields
         ("mamba_head_dim", "mamba_head_dim"),
@@ -319,6 +321,41 @@ class NemotronHBridge(MegatronModelBridge):
         """
         return {"use_fast": True}
 
+    @classmethod
+    def megatron_to_hf_config(cls, provider) -> dict:
+        hf_cfg = super().megatron_to_hf_config(provider)
+        # Clean hybrid_override_pattern: strip pipeline-parallel delimiters and validate
+        pattern = hf_cfg.pop("hybrid_override_pattern", None)
+        if pattern:
+            clean_pattern = pattern.replace("|", "")
+            valid_chars = {"M", "E", "*", "-"}
+            unknown = set(clean_pattern) - valid_chars
+            if unknown:
+                raise ValueError(
+                    f"Unknown layer type characters in hybrid_override_pattern: {unknown}. "
+                    f"Expected: M (mamba), * (attention), E (moe), - (mlp)."
+                )
+            hf_cfg["hybrid_override_pattern"] = clean_pattern
+
+        # Add auto_map for custom config/modeling classes
+        hf_cfg["auto_map"] = {
+            "AutoConfig": "configuration_nemotron_h.NemotronHConfig",
+            "AutoModel": "modeling_nemotron_h.NemotronHForCausalLM",
+            "AutoModelForCausalLM": "modeling_nemotron_h.NemotronHForCausalLM",
+        }
+
+        # We choose not to set HF-only defaults such as:
+        # Mamba: conv_kernel, time_step_*, mamba_hidden_act, etc.
+        # MoE: n_shared_experts, norm_topk_prob
+
+        # Megatron uses None="not set/disabled", but HF modeling code expects integers
+        # and will crash on None (e.g. n_routed_experts // n_group → TypeError)
+        hf_cfg["num_nextn_predict_layers"] = hf_cfg.get("num_nextn_predict_layers") or 0
+        hf_cfg["n_group"] = hf_cfg.get("n_group") or 1
+        hf_cfg["topk_group"] = hf_cfg.get("topk_group") or 1
+
+        return hf_cfg
+
     def mapping_registry(self) -> MegatronMappingRegistry:
         # Return MegatronMappingRegistry containing parameter mappings from Megatron to HF format
         # First create simple 1:1 parameter mappings using a dictionary for readability
@@ -349,11 +386,14 @@ class NemotronHBridge(MegatronModelBridge):
             "decoder.layers.*.mlp.router.expert_bias": "backbone.layers.*.mixer.gate.e_score_correction_bias",
             "decoder.layers.*.mlp.fc1_latent_proj.weight": "backbone.layers.*.mixer.fc1_latent_proj.weight",
             "decoder.layers.*.mlp.fc2_latent_proj.weight": "backbone.layers.*.mixer.fc2_latent_proj.weight",
+            "decoder.layers.*.mlp.shared_experts.linear_fc1.weight": "backbone.layers.*.mixer.shared_experts.up_proj.weight",
+            "decoder.layers.*.mlp.shared_experts.linear_fc2.weight": "backbone.layers.*.mixer.shared_experts.down_proj.weight",
             # GroupedMLP (moe_grouped_gemm=True): expert weights are stored as weight0, weight1, ...
             "decoder.layers.*.mlp.experts.linear_fc1.weight*": "backbone.layers.*.mixer.experts.*.up_proj.weight",
             "decoder.layers.*.mlp.experts.linear_fc2.weight*": "backbone.layers.*.mixer.experts.*.down_proj.weight",
-            "decoder.layers.*.mlp.shared_experts.linear_fc1.weight": "backbone.layers.*.mixer.shared_experts.up_proj.weight",
-            "decoder.layers.*.mlp.shared_experts.linear_fc2.weight": "backbone.layers.*.mixer.shared_experts.down_proj.weight",
+            # SequentialMLP (moe_grouped_gemm=False): expert weights are stored per local_expert
+            "decoder.layers.*.mlp.experts.local_experts.*.linear_fc1.weight": "backbone.layers.*.mixer.experts.*.up_proj.weight",
+            "decoder.layers.*.mlp.experts.local_experts.*.linear_fc2.weight": "backbone.layers.*.mixer.experts.*.down_proj.weight",
         }
 
         mtp_layers_per_block = int(self._mtp_layers_per_block or 0)
