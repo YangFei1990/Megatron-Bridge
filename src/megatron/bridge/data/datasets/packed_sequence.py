@@ -119,6 +119,22 @@ def tokenize_dataset(
     dataset = _retrieve_tokenized(dataset, num_tokenizer_workers)
 
     if pad_seq_to_mult > 1:
+        # Per-key pad value. Token ids pad to `pad_id`; loss_mask pads to False
+        # so that padded positions never contribute to the training loss.
+        # `loss_mask` must be padded together with `input_ids` because
+        # `create_hist` groups items by `len(input_ids)` and
+        # `fill_packing_strategy` later calls `np.array([x["loss_mask"] ...])`,
+        # which fails with an inhomogeneous-shape error when items grouped to
+        # the same bin had different original lengths.
+        _PAD_VALUES = {"input_ids": pad_id, "context_ids": pad_id, "loss_mask": False}
+
+        def _to_list(val):
+            # Chat preprocessing (`_chat_preprocess` and the legacy `_preprocess`)
+            # returns torch tensors, while non-chat paths return Python lists.
+            # Normalize to a list so we can use `+` concatenation for padding.
+            if hasattr(val, "tolist"):
+                return val.tolist()
+            return list(val)
 
         def pre_pad_dataset(data, max_seq_length, max_length_to_pad, pad_id):
             """
@@ -126,19 +142,21 @@ def tokenize_dataset(
             This keeps packed samples divisible by the requested multiple (used for CP/THD).
             """
             assert max_seq_length >= max_length_to_pad
-            for key, val in data.items():
-                if key in {"input_ids", "context_ids"}:
-                    if len(val) <= max_length_to_pad:
-                        # input_ids are truncated by 1 for labels; add 1 extra pad token
-                        val = val + [pad_id] * (max_length_to_pad - len(val) + 1)
-                    elif len(val) > max_seq_length:
-                        logging.info(
-                            "Sequence length %d is larger than max_seq_length %d; truncating for packing.",
-                            len(val),
-                            max_seq_length,
-                        )
-                        val = val[:max_seq_length]
-                    data[key] = val
+            for key, pad_value in _PAD_VALUES.items():
+                if key not in data:
+                    continue
+                val = _to_list(data[key])
+                if len(val) <= max_length_to_pad:
+                    # input_ids are truncated by 1 for labels; add 1 extra pad token
+                    val = val + [pad_value] * (max_length_to_pad - len(val) + 1)
+                elif len(val) > max_seq_length:
+                    logging.info(
+                        "Sequence length %d is larger than max_seq_length %d; truncating for packing.",
+                        len(val),
+                        max_seq_length,
+                    )
+                    val = val[:max_seq_length]
+                data[key] = val
             return
 
         def ceil_to_nearest(n, m):
