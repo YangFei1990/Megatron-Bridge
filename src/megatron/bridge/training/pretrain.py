@@ -151,7 +151,7 @@ def _pretrain(
 
         dataset_provider = _capturing_provider
 
-    setup_output = setup(state, dataset_provider, restart_store=store)
+    setup_output = setup(state, dataset_provider, restart_store=store, callback_manager=callback_manager)
     state = setup_output.state
     model = setup_output.model
     optimizer = setup_output.optimizer

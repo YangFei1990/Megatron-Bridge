@@ -51,6 +51,7 @@ training/communication-overlap.md
 training/attention-optimizations.md
 training/activation-recomputation.md
 training/cpu-offloading.md
+training/moe-optimization.md
 training/peft.md
 training/packed-sequences.md
 training/answer-only-vocab.md
@@ -81,6 +82,7 @@ apidocs/index.rst
 :caption: Releases
 :hidden:
 
+releases/release-process.md
 releases/software-versions.md
 releases/changelog.md
 releases/known-issues.md

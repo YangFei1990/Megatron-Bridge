@@ -232,7 +232,7 @@ Use exactly one type label per issue or PR after triage:
 
 ### State Labels
 
-Use at most one state label from this set at a time:
+Use at most one primary state label from this set at a time (see exceptions below):
 
 | Label | Meaning |
 | --- | --- |
@@ -242,6 +242,8 @@ Use at most one state label from this set at a time:
 | `needs-follow-up` | Issue or PR has finished initial triage/review and needs further follow-up |
 | `blocked` | Work cannot move forward until an external dependency is cleared |
 | `ready-to-merge` | PR is approved, current, and only waiting for CI to pass before merge |
+
+**Allowed combinations:** `needs-author` + `needs-follow-up` and `needs-follow-up` + `blocked` can co-exist (e.g., waiting on the author but oncall should keep tracking, or a blocked item that oncall should keep watching across handoffs).
 
 ### Risk Labels
 
@@ -358,14 +360,9 @@ Functional tests are placed in tiered launcher scripts inside [`tests/functional
 | **L1** | `L1_Launch_*.sh` | Main push + schedule; PRs labeled `needs-more-tests` | Broader model/recipe coverage |
 | **L2** | `L2_Launch_*.sh` | Schedule / `workflow_dispatch` only | VL models, checkpoint conversion, heavy quantization |
 
-When adding a new launcher script, always start with the **L0** tier so it runs on every PR. A maintainer will adjust the tier later if the test is too slow or better suited for nightly coverage. You must **also update** [`.github/workflows/cicd-main.yml`](.github/workflows/cicd-main.yml) to include it in the corresponding job matrix:
+When adding a new launcher script, always start with the **L0** tier so it runs on every PR. A maintainer will adjust the tier later if the test is too slow or better suited for nightly coverage.
 
-```yaml
-# Example: adding an L1 test
-- script: L1_Launch_your_new_test
-```
-
-Without this step, your new launcher script will not be picked up by CI.
+No workflow file changes are needed — the CI matrix is generated dynamically by scanning the launch scripts directory on every run.
 
 ## 📦 Dependencies Management
 
@@ -454,7 +451,7 @@ A refactor PR that renames something without updating all references will break 
 
 ## ✨ Code Quality
 
-- Follow the existing code style and conventions (see [CODING_GUIDELINES.md](CODING_GUIDELINES.md))
+- Follow the existing code style and conventions (see [skills/code-style/SKILL.md](skills/code-style/SKILL.md))
 - Write tests for new features
 - Update documentation to reflect your changes
 - Ensure all tests pass before submitting a PR

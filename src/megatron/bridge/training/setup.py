@@ -35,6 +35,7 @@ from megatron.core.rerun_state_machine import RerunDataIterator
 from megatron.core.transformer import MegatronModule
 
 from megatron.bridge.data.loaders import setup_data_iterators
+from megatron.bridge.training.callbacks import CallbackContext, CallbackManager, should_fire
 from megatron.bridge.models import GPTModelProvider, T5ModelProvider
 from megatron.bridge.training import fault_tolerance
 from megatron.bridge.training.checkpointing import (
@@ -54,7 +55,9 @@ from megatron.bridge.training.tensor_inspect import (
 )
 from megatron.bridge.training.tokenizers.tokenizer import build_tokenizer
 from megatron.bridge.training.utils.log_utils import append_to_progress_log, barrier_and_log, setup_logging
+from megatron.bridge.training.utils.train_utils import start_memory_history_recording
 from megatron.bridge.utils.common_utils import get_rank_safe, print_rank_0
+
 
 class SetupOutput(NamedTuple):
     """Represents the output of the main setup function.
@@ -90,6 +93,7 @@ def setup(
     get_embedding_ranks: Optional[Callable[[list[int], Optional[int]], list[int]]] = None,
     get_position_embedding_ranks: Optional[Callable[[list[int], Optional[int]], list[int]]] = None,
     restart_store: Optional[torch.distributed.Store] = None,
+    callback_manager: CallbackManager | None = None,
 ) -> SetupOutput:
     """Initialize the training/evaluation environment using an existing GlobalState.
 
@@ -109,6 +113,10 @@ def setup(
         get_embedding_ranks: Optional function to determine embedding layer ranks for model-parallel init.
         get_position_embedding_ranks: Optional function to determine positional embedding ranks.
         restart_store: Optional torch.distributed Store used when in-process restart is enabled.
+        callback_manager: Optional CallbackManager whose on_data_init_start hook is fired
+            after the model/optimizer/checkpoint are ready but before any dataset files are
+            opened. Use this for JIT warmup with mock data and MLPerf init_stop/run_start
+            logging to ensure no real dataset I/O occurs before run_start is recorded.
 
     Returns:
         SetupOutput containing the populated state, model, optimizer, scheduler, dataloaders, and ckpt context.
@@ -185,6 +193,17 @@ def setup(
     )
 
     cfg.dataset.tokenizer = tokenizer
+
+    # Compute token_dtype_code for sequences_per_dataset support.
+    # Bridge skips MCoreGPTDatasetConfig.__post_init__() (tokenizer unavailable at
+    # finalize time), so this field must be set once the tokenizer is available.
+    if hasattr(cfg.dataset, "token_dtype_code") and cfg.dataset.token_dtype_code is None:
+        vocab_size = getattr(tokenizer, "vocab_size", None)
+        if vocab_size is not None:
+            import numpy
+
+            cfg.dataset.token_dtype_code = 4 if vocab_size > numpy.iinfo(numpy.uint16).max + 1 else 8
+
     timers("tokenizer-setup").stop()
     barrier_and_log("after tokenizer is built")
 
@@ -221,6 +240,10 @@ def setup(
             return model
 
         _register_pre_wrap_hook(cfg.model, modelopt_pre_wrap_hook)
+
+    # Enable CUDA allocator history tracing before any model tensors are allocated,
+    # so snapshots dumped later in training contain a full timeline + stack context.
+    start_memory_history_recording(cfg.profiling)
 
     model = _build_distributed_model(cfg, pg_collection)
 
@@ -273,7 +296,7 @@ def setup(
             model=model,
             optimizer=optimizer,
             opt_param_scheduler=scheduler,
-            skip_load_to_model_and_opt=cfg.dist.use_torch_fsdp2 or cfg.dist.use_megatron_fsdp,
+            skip_load_to_model_and_opt=cfg.dist.use_torch_fsdp2,
         ))
         timers("load-checkpoint").stop(barrier=True)
         timers.log(["load-checkpoint"])
@@ -296,6 +319,19 @@ def setup(
         align_grad_reduce=cfg.dist.align_grad_reduce,
         pg_collection=pg_collection,
     )
+
+    # Fire on_data_init_start before any dataset files are opened.
+    # This is the correct place for JIT warmup with mock data and MLPerf
+    # init_stop/run_start logging.
+    if should_fire(callback_manager, "on_data_init_start"):
+        context = CallbackContext(
+            state=state,
+            model=model,
+            optimizer=optimizer,
+            scheduler=scheduler,
+            user_state=callback_manager.user_state,
+        )
+        callback_manager.fire("on_data_init_start", context)
 
     # Data stuff.
     timers("train/valid/test-data-iterators-setup", log_level=0).start(barrier=True)
