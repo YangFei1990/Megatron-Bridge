@@ -63,7 +63,9 @@ DEEPSEEK_PRETRAIN_PERF_RECIPES = [
                 "fused_residual_rmsnorm": False,
                 "moe_hybridep_num_sms": 32,
                 "seq_length": 4096,
-                "use_te_rng_tracker": True,
+                "use_te_rng_tracker": False,
+                # "deterministic_mode": True,
+                "cross_entropy_loss_fusion": False,  # As we want this deterministic
             },
             "ddp": {
                 "use_megatron_fsdp": True,
@@ -129,8 +131,40 @@ class TestDeepSeekRecipesPerf:
         os.environ["NVTE_NORM_FWD_USE_CUDNN"] = "1"
         os.environ["NVTE_NORM_BWD_USE_CUDNN"] = "1"
         os.environ["CUDA_DEVICE_MAX_CONNECTIONS"] = "32"
+        # os.environ["NVTE_ALLOW_NONDETERMINISTIC_ALGO"] = "0"
+        os.environ["NCCL_ALGO"] = "Tree"
+
         run_pretrain_recipe_perf_test(
             config_func,
             recipe_name,
             config_overrides=config_overrides,
         )
+
+        # if torch.distributed.get_rank() == 0:
+        #         print(tmp_file.name)
+        #         # calc_convergence_and_performance(
+        #         #     model_family_name="deepseek",
+        #         #     model_recipe_name=recipe_name,
+        #         #     assets_dir= "/tmp",
+        #         #     log_paths=[tmp_file.name],
+        #         #     loss_metric="loss",
+        #         #     timing_metric="time",
+        #         #     alloc_metric="alloc",
+        #         #     max_alloc_metric="max_alloc",
+        #         #     golden_values_path= CURR_DIR + "golden_values/test_deepseek_recipes_pretrain_perf_gb200.json",
+        #         #     convergence_config={
+        #         #         "correlation_threshold": 0.99,
+        #         #         "high_loss_tolerance": 0.05,
+        #         #         "medium_loss_tolerance": 0.1,
+        #         #         "low_loss_tolerance": 0.15,
+        #         #         "final_loss_tolerance": 0.2,
+        #         #         "max_outlier_ratio": 0.05,
+        #         #     },
+        #         #     performance_config={
+        #         #         "performance_threshold": 0.05,
+        #         #     },
+        #         #     memory_config={
+        #         #         "memory_threshold": 0.05,
+        #         #     },
+        #         #     wandb_run=None,
+        #         # )

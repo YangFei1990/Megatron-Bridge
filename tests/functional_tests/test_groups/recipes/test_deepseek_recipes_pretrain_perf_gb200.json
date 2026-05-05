@@ -1,0 +1,254 @@
+{
+    "0": {
+        "lm loss": 11.89415,
+        "elapsed time per iteration (ms)": 67383.4,
+        "GPU utilization": 1.4
+    },
+    "1": {
+        "lm loss": 11.89995,
+        "elapsed time per iteration (ms)": 340.5,
+        "GPU utilization": 285.7
+    },
+    "2": {
+        "lm loss": 6.215284,
+        "elapsed time per iteration (ms)": 236.3,
+        "GPU utilization": 411.7
+    },
+    "3": {
+        "lm loss": 12.4374,
+        "elapsed time per iteration (ms)": 235.1,
+        "GPU utilization": 413.8
+    },
+    "4": {
+        "lm loss": 10.99342,
+        "elapsed time per iteration (ms)": 235.2,
+        "GPU utilization": 413.5
+    },
+    "5": {
+        "lm loss": 9.05131,
+        "elapsed time per iteration (ms)": 235.1,
+        "GPU utilization": 413.8
+    },
+    "6": {
+        "lm loss": 8.51474,
+        "elapsed time per iteration (ms)": 232.3,
+        "GPU utilization": 418.8
+    },
+    "7": {
+        "lm loss": 8.720774,
+        "elapsed time per iteration (ms)": 233.9,
+        "GPU utilization": 416.0
+    },
+    "8": {
+        "lm loss": 8.589058,
+        "elapsed time per iteration (ms)": 233.1,
+        "GPU utilization": 417.4
+    },
+    "9": {
+        "lm loss": 8.239589,
+        "elapsed time per iteration (ms)": 231.8,
+        "GPU utilization": 419.7
+    },
+    "10": {
+        "lm loss": 8.20079,
+        "elapsed time per iteration (ms)": 248.9,
+        "GPU utilization": 391.0
+    },
+    "11": {
+        "lm loss": 8.264763,
+        "elapsed time per iteration (ms)": 237.7,
+        "GPU utilization": 409.2
+    },
+    "12": {
+        "lm loss": 8.166206,
+        "elapsed time per iteration (ms)": 236.9,
+        "GPU utilization": 410.6
+    },
+    "13": {
+        "lm loss": 8.388966,
+        "elapsed time per iteration (ms)": 237.2,
+        "GPU utilization": 410.2
+    },
+    "14": {
+        "lm loss": 8.205013,
+        "elapsed time per iteration (ms)": 238.8,
+        "GPU utilization": 407.3
+    },
+    "15": {
+        "lm loss": 8.152089,
+        "elapsed time per iteration (ms)": 235.9,
+        "GPU utilization": 412.4
+    },
+    "16": {
+        "lm loss": 8.210335,
+        "elapsed time per iteration (ms)": 234.7,
+        "GPU utilization": 414.4
+    },
+    "17": {
+        "lm loss": 8.200075,
+        "elapsed time per iteration (ms)": 239.4,
+        "GPU utilization": 406.3
+    },
+    "18": {
+        "lm loss": 8.428112,
+        "elapsed time per iteration (ms)": 236.4,
+        "GPU utilization": 411.5
+    },
+    "19": {
+        "lm loss": 8.341881,
+        "elapsed time per iteration (ms)": 235.9,
+        "GPU utilization": 412.4
+    },
+    "20": {
+        "lm loss": 8.125043,
+        "elapsed time per iteration (ms)": 246.1,
+        "GPU utilization": 395.6
+    },
+    "21": {
+        "lm loss": 8.413996,
+        "elapsed time per iteration (ms)": 235.1,
+        "GPU utilization": 413.8
+    },
+    "22": {
+        "lm loss": 8.122145,
+        "elapsed time per iteration (ms)": 234.9,
+        "GPU utilization": 414.2
+    },
+    "23": {
+        "lm loss": 8.199342,
+        "elapsed time per iteration (ms)": 234.9,
+        "GPU utilization": 414.2
+    },
+    "24": {
+        "lm loss": 8.116519,
+        "elapsed time per iteration (ms)": 235.9,
+        "GPU utilization": 412.4
+    },
+    "25": {
+        "lm loss": 8.144869,
+        "elapsed time per iteration (ms)": 235.1,
+        "GPU utilization": 413.8
+    },
+    "26": {
+        "lm loss": 8.034427,
+        "elapsed time per iteration (ms)": 236.5,
+        "GPU utilization": 411.4
+    },
+    "27": {
+        "lm loss": 8.154223,
+        "elapsed time per iteration (ms)": 235.1,
+        "GPU utilization": 413.7
+    },
+    "28": {
+        "lm loss": 8.217575,
+        "elapsed time per iteration (ms)": 234.2,
+        "GPU utilization": 415.4
+    },
+    "29": {
+        "lm loss": 8.128578,
+        "elapsed time per iteration (ms)": 233.7,
+        "GPU utilization": 416.2
+    },
+    "30": {
+        "lm loss": 8.139077,
+        "elapsed time per iteration (ms)": 245.0,
+        "GPU utilization": 397.1
+    },
+    "31": {
+        "lm loss": 8.175594,
+        "elapsed time per iteration (ms)": 235.8,
+        "GPU utilization": 412.6
+    },
+    "32": {
+        "lm loss": 8.224331,
+        "elapsed time per iteration (ms)": 235.6,
+        "GPU utilization": 412.8
+    },
+    "33": {
+        "lm loss": 8.210862,
+        "elapsed time per iteration (ms)": 238.0,
+        "GPU utilization": 408.7
+    },
+    "34": {
+        "lm loss": 8.114773,
+        "elapsed time per iteration (ms)": 236.5,
+        "GPU utilization": 411.3
+    },
+    "35": {
+        "lm loss": 8.110417,
+        "elapsed time per iteration (ms)": 234.9,
+        "GPU utilization": 414.2
+    },
+    "36": {
+        "lm loss": 8.189363,
+        "elapsed time per iteration (ms)": 236.5,
+        "GPU utilization": 411.3
+    },
+    "37": {
+        "lm loss": 8.190567,
+        "elapsed time per iteration (ms)": 234.8,
+        "GPU utilization": 414.3
+    },
+    "38": {
+        "lm loss": 8.197526,
+        "elapsed time per iteration (ms)": 235.5,
+        "GPU utilization": 413.0
+    },
+    "39": {
+        "lm loss": 8.189019,
+        "elapsed time per iteration (ms)": 235.4,
+        "GPU utilization": 413.2
+    },
+    "40": {
+        "lm loss": 7.97348,
+        "elapsed time per iteration (ms)": 245.8,
+        "GPU utilization": 396.0
+    },
+    "41": {
+        "lm loss": 8.193024,
+        "elapsed time per iteration (ms)": 237.1,
+        "GPU utilization": 410.2
+    },
+    "42": {
+        "lm loss": 8.296614,
+        "elapsed time per iteration (ms)": 234.8,
+        "GPU utilization": 414.2
+    },
+    "43": {
+        "lm loss": 8.073734,
+        "elapsed time per iteration (ms)": 236.8,
+        "GPU utilization": 410.9
+    },
+    "44": {
+        "lm loss": 8.041655,
+        "elapsed time per iteration (ms)": 236.2,
+        "GPU utilization": 411.9
+    },
+    "45": {
+        "lm loss": 8.254552,
+        "elapsed time per iteration (ms)": 234.7,
+        "GPU utilization": 414.5
+    },
+    "46": {
+        "lm loss": 8.059487,
+        "elapsed time per iteration (ms)": 232.9,
+        "GPU utilization": 417.7
+    },
+    "47": {
+        "lm loss": 7.951706,
+        "elapsed time per iteration (ms)": 236.6,
+        "GPU utilization": 411.1
+    },
+    "48": {
+        "lm loss": 8.42837,
+        "elapsed time per iteration (ms)": 234.9,
+        "GPU utilization": 414.1
+    },
+    "49": {
+        "lm loss": 8.125607,
+        "elapsed time per iteration (ms)": 234.2,
+        "GPU utilization": 415.4
+    },
+    "alloc": 81.904,
+    "max_alloc": 89.352
+}
