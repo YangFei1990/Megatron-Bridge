@@ -104,7 +104,7 @@ jobs:
       runner: ${{ needs.pre-flight.outputs.runner_prefix }}-container
       no-build-isolation: true
       app-id: ${{ vars.BOT_ID }}
-      publish-docs: ${{ inputs.publish-docs || false }}
+      publish-docs: ${{ inputs.publish-docs || true }}
       docs-target-path: nemo/megatron-bridge
       submodules: recursive
       container-options: "--gpus all --runtime=nvidia"
