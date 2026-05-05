@@ -53,6 +53,7 @@ training/activation-recomputation.md
 training/cpu-offloading.md
 training/peft.md
 training/packed-sequences.md
+training/answer-only-vocab.md
 training/multi-token-prediction.md
 training/distillation.md
 training/pruning.md

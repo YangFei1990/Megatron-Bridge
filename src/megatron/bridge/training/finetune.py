@@ -13,9 +13,10 @@
 # limitations under the License.
 
 from megatron.bridge.training.callbacks import Callback, CallbackManager
-from megatron.bridge.training.config import ConfigContainer
+from megatron.bridge.training.config import ConfigContainer, FinetuningDatasetConfig
 from megatron.bridge.training.forward_step_func_types import ForwardStepCallable
 from megatron.bridge.training.pretrain import pretrain
+from megatron.bridge.utils.common_utils import print_rank_0
 from megatron.bridge.utils.decorators import experimental_fn
 
 
@@ -50,4 +51,19 @@ def finetune(
     assert config.checkpoint.pretrained_checkpoint is not None or config.checkpoint.load is not None, (
         "Finetuning requires a loading from a pretrained checkpoint or resuming from a checkpoint"
     )
-    return pretrain(config, forward_step_func, callbacks=callbacks)
+
+    on_train_ds = None
+    if isinstance(config.dataset, FinetuningDatasetConfig) and config.dataset.answer_only_vocab:
+        from megatron.bridge.training.vocab_slice import (
+            collect_active_vocab_ids,
+            create_vocab_sliced_forward_step,
+        )
+
+        max_samples = config.dataset.answer_only_vocab_max_samples
+
+        def on_train_ds(train_ds, fwd_step):
+            active_ids = collect_active_vocab_ids(train_ds, max_samples=max_samples)
+            print_rank_0(f"[answer_only_vocab] {len(active_ids)} answer vocab IDs collected from training dataset.")
+            return create_vocab_sliced_forward_step(active_ids, fwd_step)
+
+    return pretrain(config, forward_step_func, callbacks=callbacks, _on_train_ds=on_train_ds)

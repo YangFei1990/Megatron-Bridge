@@ -33,6 +33,7 @@ def pretrain(
     config: ConfigContainer,
     forward_step_func: ForwardStepCallable,
     callbacks: list[Callback] | CallbackManager | None = None,
+    _on_train_ds=None,
 ) -> None:
     """Main function to run the training pipeline.
 
@@ -92,10 +93,15 @@ def pretrain(
 
         # Execute the wrapped function - nvidia-resiliency-ext will inject inprocess_call_wrapper
         # Call with positional args matching the adapter signature: (state, forward_step_func, store=None, inprocess_call_wrapper=None)
-        wrapped_pretrain(state, forward_step_func, callback_manager, store=store)
+        wrapped_pretrain(state, forward_step_func, callback_manager, store=store, _on_train_ds=_on_train_ds)
     else:
         # Normal execution without in-process restart
-        _pretrain(state=state, forward_step_func=forward_step_func, callback_manager=callback_manager)
+        _pretrain(
+            state=state,
+            forward_step_func=forward_step_func,
+            callback_manager=callback_manager,
+            _on_train_ds=_on_train_ds,
+        )
 
 
 def _pretrain(
@@ -104,6 +110,7 @@ def _pretrain(
     callback_manager: CallbackManager | None = None,
     store: dist.Store | None = None,
     inprocess_call_wrapper: CallWrapper | None = None,
+    _on_train_ds=None,
 ) -> None:
     """Internal function containing the actual pretrain logic.
 
@@ -113,6 +120,9 @@ def _pretrain(
         callback_manager: Optional CallbackManager for custom callback execution
         store: Optional distributed Store used by in-process restart for coordination
         inprocess_call_wrapper: Optional wrapper injected by nvrx to expose restart iteration
+        _on_train_ds: Internal hook for finetune-level post-processing. If provided, called
+            as ``_on_train_ds(train_ds, forward_step_func) -> forward_step_func`` after the
+            dataset is built and before training begins. Not part of the public API.
     """
     # Determine whether the training loop will initialize the process group
     # If the trainer creates the process group, the trainer should destroy it before returning control back to the user
@@ -125,6 +135,22 @@ def _pretrain(
 
     config = state.cfg
     dataset_provider = get_dataset_provider(config.dataset)
+
+    # If a caller (e.g. finetune) needs the raw train_ds after it is built but
+    # before training starts, it can supply _on_train_ds.  We wrap the provider
+    # to capture train_ds as a side-effect, then call the hook post-setup.
+    _captured_train_ds = []
+    if _on_train_ds is not None:
+        _original_provider = dataset_provider  # freeze ref before rebinding
+
+        def _capturing_provider(*args, **kwargs):
+            result = _original_provider(*args, **kwargs)
+            if result[0] is not None:
+                _captured_train_ds.append(result[0])
+            return result
+
+        dataset_provider = _capturing_provider
+
     setup_output = setup(state, dataset_provider, restart_store=store)
     state = setup_output.state
     model = setup_output.model
@@ -135,6 +161,9 @@ def _pretrain(
     test_data_iterator = setup_output.test_data_iterator
     checkpoint_manager = setup_output.checkpoint_manager
     pg_collection = setup_output.pg_collection
+
+    if _on_train_ds is not None and _captured_train_ds:
+        forward_step_func = _on_train_ds(_captured_train_ds[0], forward_step_func)
 
     # TRAINING
     if not config.validation.skip_train:

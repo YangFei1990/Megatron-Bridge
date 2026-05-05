@@ -496,6 +496,23 @@ class FinetuningDatasetConfig(DataloaderConfig):
     dataset_kwargs: Optional[dict[str, Any]] = None
     do_validation: bool = True
     do_test: bool = True
+    answer_only_vocab: bool = False
+    """Restrict the output projection to only the vocabulary tokens that appear
+    in training answers (intended for use with answer_only_loss=True).
+    Reduces output-matmul and cross-entropy cost proportionally to the answer
+    vocab fraction.  Not supported with tensor parallelism (TP > 1).
+
+    .. warning::
+        This changes the loss value: cross-entropy is computed over the answer
+        vocab subset rather than the full vocabulary, so absolute loss numbers
+        are not comparable to a baseline run.  Use only when the answer vocab
+        is small relative to the full vocabulary (e.g. < 5 %) and the loss
+        change is acceptable."""
+    answer_only_vocab_max_samples: Optional[int] = None
+    """Maximum number of training samples to scan when collecting the answer
+    vocab for answer_only_vocab.  None (default) scans the full training
+    dataset.  Useful for very large datasets where scanning a subset is
+    sufficient to capture all answer tokens."""
 
 
 @dataclass(kw_only=True)
