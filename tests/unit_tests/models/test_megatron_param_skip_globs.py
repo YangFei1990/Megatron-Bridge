@@ -93,3 +93,52 @@ def test_load_weights_hf_to_megatron_respects_skip_globs():
 
     assert torch.all(vision_param == 0)
     assert torch.all(lm_param == 1)
+
+
+def test_stream_weights_hf_to_megatron_respects_skip_globs():
+    """The streaming variant must not yield tasks matching skip globs."""
+
+    class _DummyMapping:
+        def __init__(self, mname: str):
+            self.hf_param = "hf.weight"
+            self.megatron_param = mname
+
+        def hf_to_megatron(self, hf_weights, megatron_module):
+            del megatron_module
+            return torch.ones_like(hf_weights)
+
+    tasks = [
+        WeightConversionTask(
+            param_name="vision_model.weight",
+            global_param_name="vision_model.weight",
+            mapping=_DummyMapping("vision_model.weight"),
+            megatron_module=mock.Mock(),
+            vp_stage=0,
+        ),
+        WeightConversionTask(
+            param_name="language_model.weight",
+            global_param_name="language_model.weight",
+            mapping=_DummyMapping("language_model.weight"),
+            megatron_module=mock.Mock(),
+            vp_stage=0,
+        ),
+    ]
+
+    hf_pretrained = mock.Mock()
+    hf_pretrained.state = {"hf.weight": torch.ones(2, 3)}
+
+    bridge = MegatronModelBridge.__new__(MegatronModelBridge)
+    megatron_stages = [mock.MagicMock()]
+
+    yielded = list(
+        MegatronModelBridge.stream_weights_hf_to_megatron(
+            bridge,
+            hf_pretrained,
+            megatron_stages,
+            conversion_tasks=tasks,
+            skip_megatron_param_globs=["*vision_model*"],
+        )
+    )
+    yielded_names = [t.param_name for t in yielded]
+    assert "vision_model.weight" not in yielded_names
+    assert "language_model.weight" in yielded_names
