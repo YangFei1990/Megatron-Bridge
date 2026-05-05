@@ -210,9 +210,16 @@ class GPTOSSBridge(MegatronModelBridge):
 
 
 class GPTOSSMLPDownProjMapping(AutoMapping):
-    """MLPDownProj for expert weights in GPT-OSS models."""
+    """MLPDownProj for expert weights in GPT-OSS models.
+
+    TE GroupedLinear stores weights transposed [in, out] vs HF [out, in].
+    For non-square gate_up_proj this is handled by GPTOSSMLPGateUpProjMapping.
+    For square down_proj (hidden == intermediate), transpose_on_export tells
+    _accumulate_grouped_export to transpose the stacked 3D tensor on export.
+    """
 
     is_grouped_export = True
+    transpose_on_export = True
 
     def __init__(self, megatron_param: str, hf_param: str, permute_dims: Optional[Tuple[int, ...]] = None):
         super().__init__(megatron_param, hf_param, permute_dims)
