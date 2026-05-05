@@ -151,9 +151,6 @@ tensor-inspect = [
 te = [
     "transformer-engine[pytorch,core_cu13]",
 ]
-fa4 = [
-    "flash-attn-4[cu13]",
-]
 ssm = [
     "mamba-ssm",
     "causal-conv1d",
