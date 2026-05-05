@@ -17,7 +17,7 @@
 Run with (single GPU):
     HF_HOME=... HF_PATH=Qwen/Qwen3.5-0.8B \
     uv run python -m torch.distributed.run --nproc_per_node=1 --master_port=29700 \
-        tests/functional_tests/models/qwen_vl/test_qwen35_llm_optimizer_state.py
+        tests/functional_tests/test_groups/models/qwen_vl/test_qwen35_llm_optimizer_state.py
 """
 
 import os

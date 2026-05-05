@@ -26,13 +26,13 @@ Run with:
     MODE=tp2 HF_HOME=... HF_PATH=Qwen/Qwen3.5-0.8B \
     CUDA_VISIBLE_DEVICES=0,1 \
     uv run python -m torch.distributed.run --nproc_per_node=2 --master_port=29720 \
-        tests/functional_tests/models/qwen_vl/test_qwen35_llm_tp_pp.py
+        tests/functional_tests/test_groups/models/qwen_vl/test_qwen35_llm_tp_pp.py
 
     # PP=2 on GPUs 2,3
     MODE=pp2 HF_HOME=... HF_PATH=Qwen/Qwen3.5-0.8B \
     CUDA_VISIBLE_DEVICES=2,3 \
     uv run python -m torch.distributed.run --nproc_per_node=2 --master_port=29721 \
-        tests/functional_tests/models/qwen_vl/test_qwen35_llm_tp_pp.py
+        tests/functional_tests/test_groups/models/qwen_vl/test_qwen35_llm_tp_pp.py
 """
 
 import os

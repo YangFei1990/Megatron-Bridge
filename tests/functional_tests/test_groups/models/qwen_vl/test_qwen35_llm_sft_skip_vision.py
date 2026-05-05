@@ -26,7 +26,7 @@ mocks the Megatron module references so no distributed init is required.
 Run with:
     HF_HOME=... HF_PATH=Qwen/Qwen3.5-0.8B \
     uv run python -m pytest \
-        tests/functional_tests/models/qwen_vl/test_qwen35_llm_sft_skip_vision.py -v
+        tests/functional_tests/test_groups/models/qwen_vl/test_qwen35_llm_sft_skip_vision.py -v
 """
 
 import os
