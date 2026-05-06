@@ -38,12 +38,12 @@ from megatron.bridge.training.config import (
     RerunStateMachineConfig,
     RNGConfig,
     SchedulerConfig,
-    TokenizerConfig,
     TrainingConfig,
     ValidationConfig,
     _validate_and_sync_distributed_optimizer_settings,
     _validate_mixed_precision_consistency,
 )
+from megatron.bridge.training.tokenizers.config import TokenizerConfig
 from megatron.bridge.utils.cuda_graph import (
     cuda_graph_module_names,
     set_cuda_graph_modules,
