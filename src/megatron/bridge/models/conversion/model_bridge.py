@@ -911,7 +911,7 @@ class MegatronModelBridge(MegatronPeftBridge, Generic[HFPreTrained, ModelProvide
         if len(grouped_buffers[group_key]) == num_experts:
             merged = torch.stack([grouped_buffers[group_key][i] for i in range(num_experts)], dim=0)
 
-            if getattr(task.mapping, "transpose_on_export", False):
+            if getattr(task.mapping, "transpose_on_export", False) and merged.ndim >= 3:
                 merged = merged.transpose(-1, -2).contiguous()
 
             del grouped_buffers[group_key]

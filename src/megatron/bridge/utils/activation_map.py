@@ -28,6 +28,12 @@ import torch.nn.functional as F
 from megatron.core.activations import fast_gelu, squared_relu
 
 
+try:
+    from megatron.core.fusions.fused_bias_geglu import quick_gelu
+except ImportError:
+    quick_gelu = None
+
+
 logger = logging.getLogger(__name__)
 
 # Canonical name -> callable.
@@ -42,6 +48,7 @@ ACTIVATION_FUNC_MAP: dict[str, Callable] = {
     "squared_relu": squared_relu,
     "gelu_pytorch_tanh": fast_gelu,  # alias; canonical is fast_gelu (below)
     "fast_gelu": fast_gelu,
+    **({"quick_gelu": quick_gelu} if quick_gelu is not None else {}),
 }
 
 # Add fully-qualified torch.nn.functional aliases
