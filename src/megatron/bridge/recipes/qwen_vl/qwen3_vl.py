@@ -677,7 +677,7 @@ def qwen3_vl_235b_a22b_sft_config() -> ConfigContainer:
         lr_warmup_iters=500,
         lr_decay_iters=300000,
         max_lr=5e-6,
-        min_lr=3e-5,
+        min_lr=1e-6,
     )
     cfg.optimizer = opt_cfg
     cfg.scheduler = scheduler_cfg
@@ -821,7 +821,7 @@ def qwen3_vl_8b_peft_config(peft_scheme: str | PEFT = "lora") -> ConfigContainer
         lr_warmup_iters=500,
         lr_decay_iters=300000,
         max_lr=1e-4,
-        min_lr=3e-5,
+        min_lr=1e-5,
     )
     cfg.optimizer = opt_cfg
     cfg.scheduler = scheduler_cfg
@@ -966,7 +966,7 @@ def qwen3_vl_30b_a3b_peft_config(peft_scheme: str | PEFT = "lora") -> ConfigCont
         lr_warmup_iters=500,
         lr_decay_iters=300000,
         max_lr=1e-4,
-        min_lr=3e-5,
+        min_lr=1e-5,
     )
     cfg.optimizer = opt_cfg
     cfg.scheduler = scheduler_cfg
@@ -1111,7 +1111,7 @@ def qwen3_vl_235b_a22b_peft_config(peft_scheme: str | PEFT = "lora") -> ConfigCo
         lr_warmup_iters=500,
         lr_decay_iters=300000,
         max_lr=1e-4,
-        min_lr=3e-5,
+        min_lr=1e-5,
     )
     cfg.optimizer = opt_cfg
     cfg.scheduler = scheduler_cfg

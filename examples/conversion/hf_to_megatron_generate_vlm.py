@@ -68,6 +68,7 @@ class SingleBatchIterator:
         mm_token_type_ids=None,
         pixel_values_videos=None,
         video_grid_thw=None,
+        image_position_ids=None,
     ):
         self.batch = dict(
             tokens=input_ids,
@@ -86,6 +87,8 @@ class SingleBatchIterator:
             self.batch["pixel_values_videos"] = pixel_values_videos
         if video_grid_thw is not None:
             self.batch["video_grid_thw"] = video_grid_thw
+        if image_position_ids is not None:
+            self.batch["image_position_ids"] = image_position_ids
         self._yielded = False
 
     def __iter__(self):
@@ -106,7 +109,7 @@ def vlm_forward_step(data_iterator, model, **kwargs) -> torch.Tensor:
         "position_ids": batch["position_ids"],
         "attention_mask": batch.get("attention_mask"),
     }
-    for key in ("pixel_values", "image_grid_thw", "image_sizes", "mm_token_type_ids", "pixel_values_videos", "video_grid_thw"):
+    for key in ("pixel_values", "image_grid_thw", "image_sizes", "mm_token_type_ids", "pixel_values_videos", "video_grid_thw", "image_position_ids"):
         if key in batch:
             forward_args[key] = batch[key]
 
@@ -145,6 +148,7 @@ def main(args) -> None:
     image_token_id = getattr(config, "image_token_id", None)
     if is_kimi and image_token_id is None:
         image_token_id = 163605
+    is_gemma4 = "gemma4" in model_type
 
     # ------------------------------------------------------------------
     # Load model
@@ -219,7 +223,7 @@ def main(args) -> None:
     # ------------------------------------------------------------------
     # Process inputs
     # ------------------------------------------------------------------
-    pixel_values = image_grid_thw = image_sizes = mm_token_type_ids = None
+    pixel_values = image_grid_thw = image_sizes = mm_token_type_ids = image_position_ids = None
     pixel_values_videos = video_grid_thw = None
 
     if args.video_path:
@@ -231,10 +235,18 @@ def main(args) -> None:
             processor, args.image_paths, args.prompt
         )
     else:
-        input_ids_raw, pixel_values, image_grid_thw, image_sizes, mm_token_type_ids = process_image_inputs(
+        (
+            input_ids_raw,
+            pixel_values,
+            image_grid_thw,
+            image_sizes,
+            mm_token_type_ids,
+            image_position_ids,
+        ) = process_image_inputs(
             processor,
             args.image_path,
             args.prompt,
+            is_gemma4=is_gemma4,
             is_kimi=is_kimi,
             image_token_id=image_token_id,
         )
@@ -246,6 +258,7 @@ def main(args) -> None:
     mm_token_type_ids = to_cuda(mm_token_type_ids)
     pixel_values_videos = to_cuda(pixel_values_videos)
     video_grid_thw = to_cuda(video_grid_thw)
+    image_position_ids = to_cuda(image_position_ids)
 
     # ------------------------------------------------------------------
     # Greedy generation loop
@@ -272,8 +285,16 @@ def main(args) -> None:
 
             fwd_bwd_function = get_forward_backward_func()
             iterator = SingleBatchIterator(
-                input_ids, position_ids, None, pixel_values, image_grid_thw, image_sizes, mm_ids_padded,
-                pixel_values_videos, video_grid_thw,
+                input_ids,
+                position_ids,
+                None,
+                pixel_values,
+                image_grid_thw,
+                image_sizes,
+                mm_ids_padded,
+                pixel_values_videos=pixel_values_videos,
+                video_grid_thw=video_grid_thw,
+                image_position_ids=image_position_ids,
             )
 
             output = fwd_bwd_function(
