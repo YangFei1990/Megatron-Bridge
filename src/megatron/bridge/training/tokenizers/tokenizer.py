@@ -26,4 +26,3 @@ def build_tokenizer(config: TokenizerConfig, **kwargs) -> MegatronTokenizer:
     )
 
     return build_mcore_tokenizer(config, **kwargs)
-
