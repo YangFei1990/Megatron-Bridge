@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import inspect
 from dataclasses import fields
 from typing import Any, Callable, Dict, Optional, Type, Union
 
@@ -25,7 +26,6 @@ from megatron.bridge.data.builders.finetuning_dataset import FinetuningDatasetBu
 from megatron.bridge.data.builders.hf_dataset import HFDatasetBuilder, HFDatasetConfig
 from megatron.bridge.data.datasets.fim_dataset import GPTFIMDataset
 from megatron.bridge.training.config import (
-    DataloaderConfig,
     DatasetBuildContext,
     DatasetProvider,
     FinetuningDatasetConfig,
@@ -106,15 +106,14 @@ def hf_train_valid_test_datasets_provider(
         f"> building train, validation, and test datasets for Huggingface dataset {dataset_config.dataset_name} ..."
     )
 
-    # Get field names from DataloaderConfig to exclude
-    dataloader_field_names = {field.name for field in fields(DataloaderConfig)}
+    builder_params = set(inspect.signature(HFDatasetBuilder.__init__).parameters) - {"self"}
 
     train_ds, valid_ds, test_ds = HFDatasetBuilder(
         tokenizer=tokenizer,
         **{
             field.name: getattr(dataset_config, field.name)
             for field in fields(dataset_config)
-            if field.name not in dataloader_field_names
+            if field.name in builder_params
         },
     ).build()
 
@@ -143,15 +142,14 @@ def finetuning_train_valid_test_datasets_provider(
         f">building train, validation, and test datasets for Finetuning dataset from {dataset_config.dataset_root} ..."
     )
 
-    # Get field names from DataloaderConfig to exclude
-    dataloader_field_names = {field.name for field in fields(DataloaderConfig)}
+    builder_params = set(inspect.signature(FinetuningDatasetBuilder.__init__).parameters) - {"self"}
 
     train_ds, valid_ds, test_ds = FinetuningDatasetBuilder(
         tokenizer=tokenizer,
         **{
             field.name: getattr(dataset_config, field.name)
             for field in fields(dataset_config)
-            if field.name not in dataloader_field_names
+            if field.name in builder_params
         },
     ).build()
 
