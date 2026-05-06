@@ -345,6 +345,9 @@ class DeepSeekV4Bridge(MegatronModelBridge):
         provider.original_max_position_embeddings = int(rs["original_max_position_embeddings"])  # 65536
         provider.beta_fast = float(rs.get("beta_fast", 32))
         provider.beta_slow = float(rs.get("beta_slow", 1))
+        # DSv4 has no mscale in HF config; Set both equal to cancel out (like DSv3).
+        provider.mscale = 1.0
+        provider.mscale_all_dim = 1.0
 
         # ---- CSA (Compressed Sparse Attention) ----
         # compress_ratios has num_hidden_layers + num_nextn_predict_layers entries in HF config.
