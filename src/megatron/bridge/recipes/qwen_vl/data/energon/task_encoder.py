@@ -57,8 +57,6 @@ def process_vision(
         image_grid_thw = None
 
     if videos is not None:
-        # DEBUGGING
-        # videos_inputs = processor(images=None, text="", videos=videos, return_tensors="pt")  
         # Pre-decoded frames from WDS are already at the desired sampling rate.
         # do_sample_frames=False prevents the processor from re-sampling them under
         # a spurious 24 fps assumption, which would reduce most clips to T=2.
@@ -223,7 +221,6 @@ class QwenVLTaskEncoder(DefaultTaskEncoder[ChatMLSample, QwenVLTaskSample, QwenV
                     len(imgs_for_processing),
                     self.max_num_images,
                 )
-                print(f"[DEBUG] (task_encoder.py) Skipping sample {sample.__key__} because it has {len(imgs_for_processing)} images, which exceeds max_num_images={self.max_num_images}")
                 raise SkipSample()
 
         if self.max_num_frames is not None and videos_for_processing is not None:
@@ -265,9 +262,6 @@ class QwenVLTaskEncoder(DefaultTaskEncoder[ChatMLSample, QwenVLTaskSample, QwenV
                     sample.__key__,
                     total_visual_tokens,
                     self.max_visual_tokens,
-                )
-                print(
-                    f"[DEBUG] (task_encoder.py) Skipping sample {sample.__key__} because it has {total_visual_tokens} visual tokens, which exceeds max_visual_tokens={self.max_visual_tokens}"
                 )
                 raise SkipSample()
 
@@ -348,10 +342,7 @@ class QwenVLTaskEncoder(DefaultTaskEncoder[ChatMLSample, QwenVLTaskSample, QwenV
                 logging.warning(
                     f"Long sequence with length {target_length} and visual tokens {total_visual_tokens} exceeds seq_len={self.seq_len}, truncation will affect visual tokens, dropping sample."
                 )
-                print(
-                    f"[DEBUG] (task_encoder.py) Long sequence with length {target_length} and visual tokens {total_visual_tokens} exceeds seq_len={self.seq_len}, truncation will affect visual tokens, dropping sample."
-                )
-                # raise SkipSample()
+                raise SkipSample()
         final_input_ids = np.zeros(target_length, dtype=input_ids.dtype)
         final_input_masks = final_input_ids.copy()
 

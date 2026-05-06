@@ -144,8 +144,7 @@ def process_multi_image_inputs(processor, image_paths: list[str], prompt: str):
     messages = [
         {
             "role": "user",
-            "content": [{"type": "image", "image": p} for p in pils]
-            + [{"type": "text", "text": prompt}],
+            "content": [{"type": "image", "image": p} for p in pils] + [{"type": "text", "text": prompt}],
         }
     ]
     image_inputs, video_inputs = process_vision_info(messages)

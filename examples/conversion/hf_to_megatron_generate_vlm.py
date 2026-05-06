@@ -376,12 +376,17 @@ if __name__ == "__main__":
     )
     parser.add_argument("--megatron_model_path", type=str, default=None, help="Path to Megatron model checkpoint")
     parser.add_argument("--image_path", type=str, default=None, help="Path or URL to a single image (optional).")
-    parser.add_argument("--image_paths", type=str, nargs="+", default=None,
-                        help="Paths to N image files in order (multi-image; Qwen-family only).")
-    parser.add_argument("--video_path", type=str, default=None,
-                        help="Path to a video file (Qwen-family only).")
-    parser.add_argument("--video_fps", type=float, default=2.0,
-                        help="Frames per second to sample from the video (default: 2.0).")
+    parser.add_argument(
+        "--image_paths",
+        type=str,
+        nargs="+",
+        default=None,
+        help="Paths to N image files in order (multi-image; Qwen-family only).",
+    )
+    parser.add_argument("--video_path", type=str, default=None, help="Path to a video file (Qwen-family only).")
+    parser.add_argument(
+        "--video_fps", type=float, default=2.0, help="Frames per second to sample from the video (default: 2.0)."
+    )
     parser.add_argument("--trust_remote_code", action="store_true", help="Trust remote code for HF model loading")
     args = parser.parse_args()
 
