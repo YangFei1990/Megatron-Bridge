@@ -122,6 +122,62 @@ def to_cuda(x):
     return x.cuda()
 
 
+def process_multi_image_inputs(processor, image_paths: list[str], prompt: str):
+    """Process N ordered images + prompt into model inputs (Qwen-family).
+
+    Returns:
+        (input_ids, pixel_values, image_grid_thw)
+    """
+    if not _HAS_QWEN_VL_UTILS:
+        raise ImportError("qwen-vl-utils required: pip install qwen-vl-utils")
+    pils = [load_image(p).convert("RGB") for p in image_paths]
+    messages = [
+        {
+            "role": "user",
+            "content": [{"type": "image", "image": p} for p in pils]
+            + [{"type": "text", "text": prompt}],
+        }
+    ]
+    image_inputs, video_inputs = process_vision_info(messages)
+    text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+    inputs = processor(text=[text], images=image_inputs, videos=video_inputs, padding=True, return_tensors="pt")
+    return inputs.input_ids, inputs.get("pixel_values"), inputs.get("image_grid_thw")
+
+
+def process_video_inputs(processor, video_path: str, prompt: str, *, fps: float = 2.0):
+    """Process a video + prompt into model inputs (Qwen-family).
+
+    Frame decoding mirrors the Qwen3-VL training pipeline: fetch_video decodes at
+    ``fps``, then video_processor is called with do_sample_frames=False to use the
+    pre-decoded frames as-is.
+
+    Returns:
+        (input_ids, pixel_values_videos, video_grid_thw)
+    """
+    if not _HAS_QWEN_VL_UTILS:
+        raise ImportError("qwen-vl-utils required: pip install qwen-vl-utils")
+    from qwen_vl_utils import fetch_video
+
+    frames = fetch_video({"video": video_path, "fps": fps})
+    messages = [
+        {
+            "role": "user",
+            "content": [{"type": "video"}, {"type": "text", "text": prompt}],
+        }
+    ]
+    text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+    text_inputs = processor(text=[text], padding=True, return_tensors="pt")
+    video_proc = processor.video_processor(videos=[frames], return_tensors="pt", do_sample_frames=False)
+    # processor(text=...) without videos produces a single <|video_pad|> placeholder (id 151656).
+    # Pre-expand to match actual vision feature count so PP send/recv shapes are correct.
+    input_ids = pre_expand_image_tokens(
+        text_inputs["input_ids"],
+        video_proc["video_grid_thw"],
+        image_token_id=151656,  # <|video_pad|> for Qwen-VL family
+    )
+    return input_ids, video_proc.get("pixel_values_videos"), video_proc.get("video_grid_thw")
+
+
 def process_image_inputs(
     processor,
     image_path: Optional[str],
