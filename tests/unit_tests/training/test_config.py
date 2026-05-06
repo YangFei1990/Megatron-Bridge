@@ -3181,7 +3181,7 @@ class TestTokenizerConfig:
         metadata_path = "/path/to/metadata.json"
 
         with pytest.raises(TypeError, match="got an unexpected keyword argument"):
-            config = TokenizerConfig(
+            TokenizerConfig(
                 tokenizer_path=tokenizer_model,
                 tokenizer_type=tokenizer_type,
                 metadata_path=metadata_path,

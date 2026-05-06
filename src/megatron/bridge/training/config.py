@@ -55,7 +55,6 @@ from megatron.bridge.peft.base import PEFT
 from megatron.bridge.training.comm_overlap import CommOverlapConfig
 from megatron.bridge.training.flex_dispatcher_backend import validate_flex_dispatcher_backend
 from megatron.bridge.training.mixed_precision import MixedPrecisionConfig, get_mixed_precision_config
-from megatron.bridge.training.tokenizers.config import TokenizerConfig
 from megatron.bridge.training.tokenizers.tokenizer import MegatronTokenizer
 from megatron.bridge.training.utils.config_utils import _ConfigContainerBase as Container
 from megatron.bridge.utils.common_utils import (
@@ -1056,6 +1055,7 @@ class TokenizerConfig(MTrainTokenizerConfig):
             )
 
         super().__post_init__()
+
 
 # ---------------- Container config (standalone top-level config) ----------------
 @dataclass(kw_only=True)
