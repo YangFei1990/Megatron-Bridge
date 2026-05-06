@@ -81,7 +81,7 @@ jobs:
       NVIDIA_MANAGEMENT_ORG_PAT: ${{ secrets.NVIDIA_MANAGEMENT_ORG_PAT }}
 
   release:
-    uses: NVIDIA-NeMo/FW-CI-templates/.github/workflows/_release_library.yml@a0921929733d506dee2de6889c39feee5da623ab
+    uses: NVIDIA-NeMo/FW-CI-templates/.github/workflows/_release_library.yml@6afcae295503a63fdafed18ba127c7d6dda24c01
     needs: [pre-flight]
     if: |
       github.event_name == 'workflow_dispatch'
