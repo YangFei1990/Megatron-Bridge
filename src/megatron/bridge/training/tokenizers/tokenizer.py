@@ -6,6 +6,7 @@ from megatron.bridge.utils.common_utils import warn_rank_0
 
 from megatron.core.tokenizers import MegatronTokenizer
 from megatron.core.tokenizers.utils.build_tokenizer import build_tokenizer as build_mcore_tokenizer
+from megatron.bridge.training.config import TokenizerConfig
 
 
 def build_tokenizer(config: TokenizerConfig, **kwargs) -> MegatronTokenizer:
