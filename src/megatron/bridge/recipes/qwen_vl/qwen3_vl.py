@@ -1168,5 +1168,7 @@ def qwen3_vl_8b_peft_energon_config(peft_scheme: str | PEFT = "lora") -> ConfigC
     """
     cfg = qwen3_vl_8b_peft_config(peft_scheme=peft_scheme)
     hf_path = "Qwen/Qwen3-VL-8B-Instruct"
-    cfg.dataset = _make_energon_dataset(hf_path, cfg.model.seq_length, cfg.train.micro_batch_size, cfg.train.global_batch_size)
+    cfg.dataset = _make_energon_dataset(
+        hf_path, cfg.model.seq_length, cfg.train.micro_batch_size, cfg.train.global_batch_size
+    )
     return cfg

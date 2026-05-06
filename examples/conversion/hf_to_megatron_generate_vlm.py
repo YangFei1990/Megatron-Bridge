@@ -109,7 +109,15 @@ def vlm_forward_step(data_iterator, model, **kwargs) -> torch.Tensor:
         "position_ids": batch["position_ids"],
         "attention_mask": batch.get("attention_mask"),
     }
-    for key in ("pixel_values", "image_grid_thw", "image_sizes", "mm_token_type_ids", "pixel_values_videos", "video_grid_thw", "image_position_ids"):
+    for key in (
+        "pixel_values",
+        "image_grid_thw",
+        "image_sizes",
+        "mm_token_type_ids",
+        "pixel_values_videos",
+        "video_grid_thw",
+        "image_position_ids",
+    ):
         if key in batch:
             forward_args[key] = batch[key]
 

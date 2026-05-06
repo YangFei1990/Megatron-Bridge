@@ -266,7 +266,9 @@ class QwenVLTaskEncoder(DefaultTaskEncoder[ChatMLSample, QwenVLTaskSample, QwenV
                     total_visual_tokens,
                     self.max_visual_tokens,
                 )
-                print(f"[DEBUG] (task_encoder.py) Skipping sample {sample.__key__} because it has {total_visual_tokens} visual tokens, which exceeds max_visual_tokens={self.max_visual_tokens}")
+                print(
+                    f"[DEBUG] (task_encoder.py) Skipping sample {sample.__key__} because it has {total_visual_tokens} visual tokens, which exceeds max_visual_tokens={self.max_visual_tokens}"
+                )
                 raise SkipSample()
 
         # Normalize conversation to [{"role": ..., "content": ...}, ...]
@@ -346,7 +348,9 @@ class QwenVLTaskEncoder(DefaultTaskEncoder[ChatMLSample, QwenVLTaskSample, QwenV
                 logging.warning(
                     f"Long sequence with length {target_length} and visual tokens {total_visual_tokens} exceeds seq_len={self.seq_len}, truncation will affect visual tokens, dropping sample."
                 )
-                print(f"[DEBUG] (task_encoder.py) Long sequence with length {target_length} and visual tokens {total_visual_tokens} exceeds seq_len={self.seq_len}, truncation will affect visual tokens, dropping sample.")
+                print(
+                    f"[DEBUG] (task_encoder.py) Long sequence with length {target_length} and visual tokens {total_visual_tokens} exceeds seq_len={self.seq_len}, truncation will affect visual tokens, dropping sample."
+                )
                 # raise SkipSample()
         final_input_ids = np.zeros(target_length, dtype=input_ids.dtype)
         final_input_masks = final_input_ids.copy()
