@@ -1048,7 +1048,7 @@ class TokenizerConfig(MTrainTokenizerConfig):
             )
 
         # SentencePiece tokenizer kwargs
-        self.tokenizer_sentencepiece_legacy = self.sp_tokenizer_kwargs.get("tokenizer_sentencepiece_legacy", False)
+        self.tokenizer_sentencepiece_legacy = self.sp_tokenizer_kwargs.get("legacy", False)
         if self.sp_tokenizer_kwargs:
             warn_rank_0(
                 "`sp_tokenizer_kwargs` is deprecated and will be removed soon. "
