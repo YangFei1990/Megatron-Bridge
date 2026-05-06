@@ -177,36 +177,34 @@ RUN curl -LsSf https://astral.sh/uv/${UV_VERSION}/install.sh | XDG_BIN_HOME=/usr
 
 ##############################################################################
 ##
-## rdma-core v60 stack
+## rdma-core v60 (upgrade in place over the v59.1 preinstall)
 ##
-## DeepEP NVSHMEM-IBGDA on B200 / ConnectX-7 needs the v60 user-space rdma-core
-## (libibverbs / ibverbs-providers / librdmacm). pytorch:26.04-py3 ships the
-## v59.1 stack and the Ubuntu apt repo only goes to v50, so we bring in the
-## v60 .debs that the AWS EFA installer 1.46.0 bundles for UBUNTU2404.
+## The Hybrid-EP DOCA path (csrc/hybrid_ep/) requires upstream rdma-core v60.0
+## per the README at https://github.com/deepseek-ai/DeepEP/blob/hybrid-ep/docs/README_Hybrid-EP.md:
 ##
-## (Functionally restores the v60 stack that the deleted aws_ofi_builder stage
-## (#3638) brought in via the full EFA installer, without dragging in the rest
-## of /opt/amazon.)
+##     RDMA Core requirement: install rdma-core v60.0
+##
+## pytorch:26.04-py3 base preinstalls v59.1 user-space packages and the apt
+## repo doesn't carry v60, so we follow the README's recipe: build v60 from
+## upstream source, then `make install` over the system to upgrade in place.
 ##
 ##############################################################################
 
 FROM fw_dep_builder AS rdma_core_v60
 
-ARG EFA_INSTALLER_VERSION=1.46.0
-RUN ARCH_LIB=$(dpkg-architecture -qDEB_HOST_MULTIARCH) && \
-    case "$ARCH_LIB" in \
-      x86_64-linux-gnu)  EFA_ARCH=x86_64 ;; \
-      aarch64-linux-gnu) EFA_ARCH=aarch64 ;; \
-      *) echo "unsupported arch $ARCH_LIB"; exit 1 ;; \
-    esac && \
-    cd /tmp && \
-    curl -fsSL -o efa.tar.gz https://efa-installer.amazonaws.com/aws-efa-installer-${EFA_INSTALLER_VERSION}.tar.gz && \
-    tar -xf efa.tar.gz aws-efa-installer/DEBS/UBUNTU2404/${EFA_ARCH}/rdma-core/ && \
-    DEBIAN_FRONTEND=noninteractive apt-get update && \
-    DEBIAN_FRONTEND=noninteractive apt-get install -y --allow-change-held-packages \
-        /tmp/aws-efa-installer/DEBS/UBUNTU2404/${EFA_ARCH}/rdma-core/*.deb && \
-    apt-get clean && \
-    rm -rf /tmp/efa.tar.gz /tmp/aws-efa-installer /var/lib/apt/lists/*
+ARG RDMA_CORE_TAG=v60.0
+RUN apt-get update && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        build-essential cmake ninja-build pkg-config \
+        libudev-dev libnl-3-dev libnl-route-3-dev libsystemd-dev \
+        libpython3-dev python3-docutils && \
+    git clone --depth 1 --branch ${RDMA_CORE_TAG} https://github.com/linux-rdma/rdma-core.git /opt/rdma-core && \
+    cd /opt/rdma-core && \
+    sh build.sh && \
+    cd build && \
+    cmake --install . && \
+    ldconfig && \
+    rm -rf /var/lib/apt/lists/*
 
 ##############################################################################
 ##
@@ -263,21 +261,11 @@ ENV RDMA_CORE_HOME=/opt/rdma-core/build
 ENV LD_LIBRARY_PATH=/usr/local/cuda/lib64/:$LD_LIBRARY_PATH
 RUN --mount=type=bind,source=docker/patches/deepep.patch,target=/opt/deepep.patch \
     if [ "$INSTALL_DEEPEP" = "True" ]; then \
-    # Upgrade system rdma-core to v60; libibverbs-dev supplies the unversioned
-    # libibverbs.so symlink required at link time.
-    apt-get update && apt-get install -y --allow-change-held-packages \
-        rdma-core libibverbs-dev && \
-    apt-get clean && \
     ARCH_LIB=$(dpkg-architecture -qDEB_HOST_MULTIARCH) && \
-    # libmlx5-dev is not available in the apt sources; create the unversioned
-    # symlink from the versioned one as a fallback for the DeepEP build.
+    # libmlx5 ships as libmlx5.so.1 inside ibverbs-providers; create the
+    # unversioned symlink the DeepEP build expects.
     test -f /usr/lib/${ARCH_LIB}/libmlx5.so || \
         ln -sf /usr/lib/${ARCH_LIB}/libmlx5.so.1 /usr/lib/${ARCH_LIB}/libmlx5.so && \
-    # Expose the system install under RDMA_CORE_HOME so DeepEP setup.py finds
-    # $RDMA_CORE_HOME/include and $RDMA_CORE_HOME/lib without a separate source build.
-    mkdir -p ${RDMA_CORE_HOME} && \
-    ln -sfn /usr/include ${RDMA_CORE_HOME}/include && \
-    ln -sfn /usr/lib/${ARCH_LIB} ${RDMA_CORE_HOME}/lib && \
     git clone https://github.com/deepseek-ai/DeepEP.git && \
     pushd DeepEP && \
         git pull && \
