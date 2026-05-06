@@ -38,6 +38,7 @@ RUN curl -LsSf https://astral.sh/uv/${UV_VERSION}/install.sh | sh && \
 
 ARG INSTALL_DEEPEP=True
 ARG DEEPEP_COMMIT=34152ae28f80bcc3ee38d7a12cb2ad87cfd4ea72
+ARG DEEPEP_REPO_URL=https://github.com/deepseek-ai/DeepEP.git
 
 ENV HYBRID_EP_MULTINODE=1
 ENV RDMA_CORE_HOME=/opt/rdma-core/build
@@ -59,7 +60,7 @@ RUN --mount=type=bind,source=docker/patches/deepep.patch,target=/opt/deepep.patc
     mkdir -p ${RDMA_CORE_HOME} && \
     ln -sfn /usr/include ${RDMA_CORE_HOME}/include && \
     ln -sfn /usr/lib/${ARCH_LIB} ${RDMA_CORE_HOME}/lib && \
-    git clone https://github.com/deepseek-ai/DeepEP.git && \
+    git clone ${DEEPEP_REPO_URL} DeepEP && \
     pushd DeepEP && \
         git pull && \
         git fetch origin $DEEPEP_COMMIT && \
