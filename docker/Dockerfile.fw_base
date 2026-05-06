@@ -177,11 +177,44 @@ RUN curl -LsSf https://astral.sh/uv/${UV_VERSION}/install.sh | XDG_BIN_HOME=/usr
 
 ##############################################################################
 ##
+## rdma-core v60 stack
+##
+## DeepEP NVSHMEM-IBGDA on B200 / ConnectX-7 needs the v60 user-space rdma-core
+## (libibverbs / ibverbs-providers / librdmacm). pytorch:26.04-py3 ships the
+## v59.1 stack and the Ubuntu apt repo only goes to v50, so we bring in the
+## v60 .debs that the AWS EFA installer 1.46.0 bundles for UBUNTU2404.
+##
+## (Functionally restores the v60 stack that the deleted aws_ofi_builder stage
+## (#3638) brought in via the full EFA installer, without dragging in the rest
+## of /opt/amazon.)
+##
+##############################################################################
+
+FROM fw_dep_builder AS rdma_core_v60
+
+ARG EFA_INSTALLER_VERSION=1.46.0
+RUN ARCH_LIB=$(dpkg-architecture -qDEB_HOST_MULTIARCH) && \
+    case "$ARCH_LIB" in \
+      x86_64-linux-gnu)  EFA_ARCH=x86_64 ;; \
+      aarch64-linux-gnu) EFA_ARCH=aarch64 ;; \
+      *) echo "unsupported arch $ARCH_LIB"; exit 1 ;; \
+    esac && \
+    cd /tmp && \
+    curl -fsSL -o efa.tar.gz https://efa-installer.amazonaws.com/aws-efa-installer-${EFA_INSTALLER_VERSION}.tar.gz && \
+    tar -xf efa.tar.gz aws-efa-installer/DEBS/UBUNTU2404/${EFA_ARCH}/rdma-core/ && \
+    DEBIAN_FRONTEND=noninteractive apt-get update && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --allow-change-held-packages \
+        /tmp/aws-efa-installer/DEBS/UBUNTU2404/${EFA_ARCH}/rdma-core/*.deb && \
+    apt-get clean && \
+    rm -rf /tmp/efa.tar.gz /tmp/aws-efa-installer /var/lib/apt/lists/*
+
+##############################################################################
+##
 ## CUDA toolkit + DeepEP stage
 ##
 ##############################################################################
 
-FROM fw_dep_builder AS fw_toolkit_builder
+FROM rdma_core_v60 AS fw_toolkit_builder
 
 ##############################################################################
 ##
