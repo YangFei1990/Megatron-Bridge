@@ -54,6 +54,8 @@ def mock_thinker_config(mock_text_config):
     thinker.video_token_id = 151656
     thinker.audio_token_id = 151646
     thinker.vision_start_token_id = 151652
+    thinker.vision_end_token_id = 151753
+    thinker.audio_end_token_id = 151748
     vision_config = Mock(spec=[])
     vision_config.patch_size = 32
     vision_config.temporal_patch_size = 4
@@ -71,6 +73,8 @@ def mock_hf_config(mock_thinker_config):
     config.talker_config = Mock()
     config.code2wav_config = Mock()
     config.tie_word_embeddings = True
+    config.bos_token_id = 151743
+    config.eos_token_id = 151745
     return config
 
 
@@ -104,6 +108,15 @@ class TestQwen3OmniBridge:
         assert provider.patch_size == 32
         assert provider.temporal_patch_size == 4
         assert provider.spatial_merge_size == 3
+        assert provider.image_token_id == 151655
+        assert provider.video_token_id == 151656
+        assert provider.audio_token_id == 151646
+        assert provider.vision_start_token_id == 151652
+        assert provider.vision_end_token_id == 151753
+        assert provider.audio_start_token_id == 151647
+        assert provider.audio_end_token_id == 151748
+        assert provider.bos_token_id == 151743
+        assert provider.eos_token_id == 151745
 
     @patch.object(Qwen3OmniBridge, "dtype_from_hf")
     def test_provider_bridge_dtype(self, mock_dtype_from_hf, mock_hf_pretrained):

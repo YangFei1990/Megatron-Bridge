@@ -178,10 +178,6 @@ def test_forward_step_passes_omni_multimodal_args(monkeypatch):
         lambda model: model.config,
     )
     monkeypatch.setattr(
-        "megatron.bridge.models.qwen_omni.qwen3_omni_step.get_batch_on_this_cp_rank",
-        lambda batch, cp_group=None: batch,
-    )
-    monkeypatch.setattr(
         "megatron.bridge.models.qwen_omni.qwen3_omni_step.is_pp_first_stage",
         lambda pg: True,
     )
@@ -217,6 +213,92 @@ def test_forward_step_passes_omni_multimodal_args(monkeypatch):
     assert "pixel_values" in model.kwargs
     assert "input_features" in model.kwargs
     assert "audio_feature_lengths" in model.kwargs
+
+
+def test_forward_step_rejects_context_parallel(monkeypatch):
+    class _MockProcessGroup:
+        def rank(self):
+            return 0
+
+        def size(self):
+            return 2
+
+    class _MockPGCollection:
+        def __init__(self):
+            self.pp = _MockProcessGroup()
+            self.cp = _MockProcessGroup()
+
+    class _Model:
+        def __init__(self):
+            self.config = type("Cfg", (), {"mtp_num_layers": 0, "overlap_moe_expert_parallel_comm": True})()
+
+        def __call__(self, **kwargs):  # noqa: ARG002
+            raise AssertionError("model forward should not run when CP is enabled")
+
+    class _Timer:
+        def __call__(self, *args, **kwargs):  # noqa: ARG002
+            return self
+
+        def start(self):
+            return self
+
+        def stop(self):
+            return self
+
+    class _Strag:
+        def __call__(self, *args, **kwargs):  # noqa: ARG002
+            return self
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):  # noqa: ARG002
+            return False
+
+    state = type("State", (), {})()
+    state.cfg = type(
+        "Cfg",
+        (),
+        {
+            "dataset": type("D", (), {"skip_getting_attention_mask_from_dataset": False})(),
+            "model": type("M", (), {"pipeline_model_parallel_size": 1, "seq_length": 8})(),
+            "rerun_state_machine": type("R", (), {"check_for_nan_in_loss": False, "check_for_spiky_loss": False})(),
+        },
+    )()
+    state.timers = _Timer()
+    state.straggler_timer = _Strag()
+
+    tokens = torch.tensor([[1, 2, 3, 4, 5, 6, 7, 8]])
+    labels = torch.tensor([[2, 3, 4, 5, 6, 7, 8, -100]])
+    loss_mask = torch.ones(1, 8)
+
+    monkeypatch.setattr(
+        "megatron.bridge.models.qwen_omni.qwen3_omni_step.get_pg_collection",
+        lambda model: _MockPGCollection(),
+    )
+    monkeypatch.setattr(
+        "megatron.bridge.models.qwen_omni.qwen3_omni_step.get_model_config",
+        lambda model: model.config,
+    )
+    monkeypatch.setattr(
+        "megatron.bridge.models.qwen_omni.qwen3_omni_step.get_batch",
+        lambda data_iterator, cfg, use_mtp, pg_collection: (
+            tokens,
+            labels,
+            loss_mask,
+            torch.ones(1, 8, dtype=torch.bool),
+            torch.arange(8).unsqueeze(0),
+            {},
+        ),
+    )
+
+    model = _Model()
+    try:
+        forward_step(state, iter([{}]), model)
+    except NotImplementedError as exc:
+        assert "CP is not supported yet" in str(exc)
+    else:
+        raise AssertionError("expected NotImplementedError for Qwen3-Omni CP")
 
 
 def test_get_batch_pads_2d_attention_mask_for_pipeline_parallel():

@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING, Any, Iterable
 import torch
 from megatron.core.models.gpt import GPTModel
 from megatron.core.pipeline_parallel.utils import is_pp_first_stage, is_pp_last_stage
-from megatron.core.utils import get_batch_on_this_cp_rank, get_model_config
+from megatron.core.utils import get_model_config
 
 from megatron.bridge.training.losses import (
     create_masked_next_token_loss_function as _create_loss_function,
@@ -178,6 +178,9 @@ def forward_step(
         )
     timers("batch-generator").stop()
 
+    if pg_collection.cp.size() > 1:
+        raise NotImplementedError("Qwen3-Omni training supports SP/EP, but CP is not supported yet.")
+
     forward_args = {
         "input_ids": tokens,
         "position_ids": position_ids,
@@ -188,8 +191,6 @@ def forward_step(
     forward_args.update(multimodal_inputs)
 
     # The Omni thinker computes multimodal mRoPE internally from full input_ids.
-    forward_args = get_batch_on_this_cp_rank(forward_args, cp_group=pg_collection.cp)
-    forward_args["input_ids"] = tokens
     forward_args["position_ids"] = None
 
     check_for_nan_in_loss = state.cfg.rerun_state_machine.check_for_nan_in_loss
