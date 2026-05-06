@@ -39,7 +39,6 @@ from megatron.bridge.data.energon.task_encoder_utils import (
 from megatron.bridge.training.utils.visual_inputs import Qwen2_5_VLVisualInputs
 
 
-
 def process_vision(
     processor, images, videos, fps=None, model_version: str = "qwen-vl", min_pixels=None, max_pixels=None
 ):
@@ -233,7 +232,9 @@ class QwenVLTaskEncoder(DefaultTaskEncoder[ChatMLSample, QwenVLTaskSample, QwenV
                         self.max_num_frames,
                         sample.__key__,
                     )
-                    print(f"[DEBUG] (task_encoder.py) Truncating {len(v)} frames to max_num_frames={self.max_num_frames} for sample {sample.__key__}")
+                    print(
+                        f"[DEBUG] (task_encoder.py) Truncating {len(v)} frames to max_num_frames={self.max_num_frames} for sample {sample.__key__}"
+                    )
                     clipped.append(v[: self.max_num_frames])
                 else:
                     clipped.append(v)
@@ -252,8 +253,12 @@ class QwenVLTaskEncoder(DefaultTaskEncoder[ChatMLSample, QwenVLTaskSample, QwenV
         flattened_videos = processed_vision["video_inputs"]
 
         merge_length = self.merge_size**2
-        image_tokens = int(image_thw_grids.prod(dim=-1).sum().item()) // merge_length if image_thw_grids is not None else 0
-        video_tokens = int(video_thw_grids.prod(dim=-1).sum().item()) // merge_length if video_thw_grids is not None else 0
+        image_tokens = (
+            int(image_thw_grids.prod(dim=-1).sum().item()) // merge_length if image_thw_grids is not None else 0
+        )
+        video_tokens = (
+            int(video_thw_grids.prod(dim=-1).sum().item()) // merge_length if video_thw_grids is not None else 0
+        )
         total_visual_tokens = image_tokens + video_tokens
         if self.max_visual_tokens is not None:
             if total_visual_tokens > self.max_visual_tokens:
