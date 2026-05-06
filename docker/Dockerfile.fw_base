@@ -197,14 +197,15 @@ FROM fw_dep_builder AS rdma_core_v60
 ARG RDMA_CORE_TAG=v60.0
 RUN apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-        devscripts equivs && \
+        devscripts equivs dpkg-dev && \
     git clone --depth 1 --branch ${RDMA_CORE_TAG} https://github.com/linux-rdma/rdma-core.git /opt/rdma-core && \
     cd /opt/rdma-core && \
     # Install rdma-core's build dependencies from its own debian/control.
     DEBIAN_FRONTEND=noninteractive mk-build-deps --install --remove \
         --tool 'apt-get -y --no-install-recommends' debian/control && \
-    # Build proper Debian packages from upstream v60.0 sources.
-    debuild -us -uc -b && \
+    # Build proper Debian binary packages from upstream v60.0 sources.
+    # `-d` skips the dependency-check (mk-build-deps already installed them).
+    DEBEMAIL=ci@nvidia.com DEBFULLNAME=ci dpkg-buildpackage -us -uc -b -d && \
     # Upgrade the dpkg-managed v59.1 stack in place. --allow-change-held-packages
     # because some of these are baked into the base image with apt holds.
     DEBIAN_FRONTEND=noninteractive apt-get install -y --allow-change-held-packages \
