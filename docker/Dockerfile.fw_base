@@ -185,8 +185,10 @@ RUN curl -LsSf https://astral.sh/uv/${UV_VERSION}/install.sh | XDG_BIN_HOME=/usr
 ##     RDMA Core requirement: install rdma-core v60.0
 ##
 ## pytorch:26.04-py3 base preinstalls v59.1 user-space packages and the apt
-## repo doesn't carry v60, so we follow the README's recipe: build v60 from
-## upstream source, then `make install` over the system to upgrade in place.
+## repo doesn't carry v60, so we build proper Debian binary packages from
+## upstream v60.0 source via the project's own debian/ packaging, then apt
+## install them — keeping the system install dpkg-managed under /usr without
+## a coexisting /usr/local stack and without depending on AWS EFA bundles.
 ##
 ##############################################################################
 
@@ -195,16 +197,21 @@ FROM fw_dep_builder AS rdma_core_v60
 ARG RDMA_CORE_TAG=v60.0
 RUN apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-        build-essential cmake ninja-build pkg-config \
-        libudev-dev libnl-3-dev libnl-route-3-dev libsystemd-dev \
-        libpython3-dev python3-docutils && \
+        devscripts equivs && \
     git clone --depth 1 --branch ${RDMA_CORE_TAG} https://github.com/linux-rdma/rdma-core.git /opt/rdma-core && \
     cd /opt/rdma-core && \
-    sh build.sh && \
-    cd build && \
-    cmake --install . && \
+    # Install rdma-core's build dependencies from its own debian/control.
+    DEBIAN_FRONTEND=noninteractive mk-build-deps --install --remove \
+        --tool 'apt-get -y --no-install-recommends' debian/control && \
+    # Build proper Debian packages from upstream v60.0 sources.
+    debuild -us -uc -b && \
+    # Upgrade the dpkg-managed v59.1 stack in place. --allow-change-held-packages
+    # because some of these are baked into the base image with apt holds.
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --allow-change-held-packages \
+        /opt/*.deb && \
     ldconfig && \
-    rm -rf /var/lib/apt/lists/*
+    apt-get clean && \
+    rm -rf /opt/*.deb /opt/*.changes /opt/*.buildinfo /var/lib/apt/lists/*
 
 ##############################################################################
 ##
