@@ -212,7 +212,10 @@ RUN apt-get update && \
         /opt/*.deb && \
     ldconfig && \
     apt-get clean && \
-    rm -rf /opt/*.deb /opt/*.changes /opt/*.buildinfo /var/lib/apt/lists/*
+    # Single source of truth: the dpkg-managed v60 install at /usr.
+    # Drop the source tree and the intermediate .debs so nothing else can
+    # re-import them later in the build.
+    rm -rf /opt/rdma-core /opt/*.deb /opt/*.changes /opt/*.buildinfo /var/lib/apt/lists/*
 
 ##############################################################################
 ##
@@ -265,7 +268,7 @@ ARG INSTALL_DEEPEP
 ARG DEEPEP_COMMIT
 
 ENV HYBRID_EP_MULTINODE=1
-ENV RDMA_CORE_HOME=/opt/rdma-core/build
+ENV RDMA_CORE_HOME=/opt/rdma-core-home
 ENV LD_LIBRARY_PATH=/usr/local/cuda/lib64/:$LD_LIBRARY_PATH
 RUN --mount=type=bind,source=docker/patches/deepep.patch,target=/opt/deepep.patch \
     if [ "$INSTALL_DEEPEP" = "True" ]; then \
@@ -274,6 +277,11 @@ RUN --mount=type=bind,source=docker/patches/deepep.patch,target=/opt/deepep.patc
     # unversioned symlink the DeepEP build expects.
     test -f /usr/lib/${ARCH_LIB}/libmlx5.so || \
         ln -sf /usr/lib/${ARCH_LIB}/libmlx5.so.1 /usr/lib/${ARCH_LIB}/libmlx5.so && \
+    # Point RDMA_CORE_HOME at the dpkg-installed v60 stack at /usr.
+    # Single source of truth: just symlinks; no second on-disk copy.
+    mkdir -p ${RDMA_CORE_HOME} && \
+    ln -sfn /usr/include          ${RDMA_CORE_HOME}/include && \
+    ln -sfn /usr/lib/${ARCH_LIB}  ${RDMA_CORE_HOME}/lib && \
     git clone https://github.com/deepseek-ai/DeepEP.git && \
     pushd DeepEP && \
         git pull && \
