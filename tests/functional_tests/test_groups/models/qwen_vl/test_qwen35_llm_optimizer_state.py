@@ -12,7 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""T2.5: Optimizer state excludes vision tower; peak memory is lower than VL recipe.
+"""T2.5: Vision tower is not instantiated; only LLM params are present.
+
+The recipe sets ``init_vision_model=False`` on the provider, so the Megatron
+model has no ``vision_model.*`` or ``visual.*`` parameters at all. This test
+verifies that and reports peak memory.
 
 Run with (single GPU):
     HF_HOME=... HF_PATH=Qwen/Qwen3.5-0.8B \
@@ -40,8 +44,8 @@ def main():
 
     results: dict = {}
 
-    class OptimizerStateChecker(Callback):
-        """After the first training step, inspect which params are frozen vs trainable."""
+    class ParameterChecker(Callback):
+        """After the first training step, inspect which params exist and are trainable."""
 
         def on_train_step_end(self, context: CallbackContext) -> None:
             if context.state.train_state.step != 0:
@@ -49,27 +53,23 @@ def main():
 
             from megatron.core.utils import unwrap_model
 
-            # Frozen params have requires_grad=False and therefore never enter the
-            # optimizer.  This is the authoritative check: if freeze_vision_model=True
-            # and freeze_vision_projection=True the vision tower must be entirely frozen.
-            vision_trainable = []
-            vision_frozen = []
+            vision_present = []
             lm_trainable = []
+            lm_frozen = []
 
             for model_chunk in unwrap_model(context.model):
                 for name, param in model_chunk.named_parameters():
                     if "vision_model" in name or "visual" in name:
-                        if param.requires_grad:
-                            vision_trainable.append(name)
-                        else:
-                            vision_frozen.append(name)
+                        vision_present.append(name)
                     else:
                         if param.requires_grad:
                             lm_trainable.append(name)
+                        else:
+                            lm_frozen.append(name)
 
-            results["vision_trainable"] = vision_trainable
-            results["vision_frozen"] = vision_frozen
+            results["vision_present"] = vision_present
             results["lm_trainable"] = lm_trainable
+            results["lm_frozen"] = lm_frozen
             results["peak_mem_gb"] = torch.cuda.max_memory_allocated() / 1e9
 
     cfg = qwen35_llm_800m_sft_config(hf_path=HF_PATH)
@@ -85,26 +85,26 @@ def main():
     cfg.checkpoint.load = _ckpt_dir
 
     torch.cuda.reset_peak_memory_stats()
-    finetune(cfg, forward_step, callbacks=[OptimizerStateChecker()])
+    finetune(cfg, forward_step, callbacks=[ParameterChecker()])
 
     # Only rank-0 reports results.
     if not dist.is_initialized() or dist.get_rank() == 0:
-        vision_trainable = results.get("vision_trainable", [])
-        vision_frozen = results.get("vision_frozen", [])
+        vision_present = results.get("vision_present", [])
         lm_trainable = results.get("lm_trainable", [])
+        lm_frozen = results.get("lm_frozen", [])
         peak_mem_gb = results.get("peak_mem_gb", float("nan"))
 
         print("\n" + "=" * 70)
-        print("T2.5 Optimizer State Check")
+        print("T2.5 Parameter Inventory")
         print("=" * 70)
         print(f"  LM params (trainable)      : {len(lm_trainable)}")
-        print(f"  Vision params (frozen)     : {len(vision_frozen)}")
-        print(f"  Vision params (trainable!) : {len(vision_trainable)}")
+        print(f"  LM params (frozen)         : {len(lm_frozen)}")
+        print(f"  Vision params (present)    : {len(vision_present)}")
         print(f"  Peak GPU memory (GB)       : {peak_mem_gb:.3f}")
 
-        if vision_trainable:
-            print("\n  FAIL — vision params are trainable (should be frozen):")
-            for n in vision_trainable[:10]:
+        if vision_present:
+            print("\n  FAIL — vision params are present in the model (should not exist):")
+            for n in vision_present[:10]:
                 print(f"    {n}")
             sys.exit(1)
 
@@ -112,10 +112,7 @@ def main():
             print("\n  FAIL — no LM params are trainable (recipe misconfigured)")
             sys.exit(1)
 
-        if not vision_frozen:
-            print("\n  WARN — no frozen vision params found; model may not have a vision tower")
-
-        print("\n  PASS — vision tower fully frozen; LM params trainable")
+        print("\n  PASS — vision tower not instantiated; only LM params present and trainable")
         print("=" * 70)
 
 

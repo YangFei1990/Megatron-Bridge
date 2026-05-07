@@ -17,8 +17,8 @@
 # Functional tests for the Qwen3.5 LLM-only SFT recipe.
 #
 # Covers:
-#   T2.2  skip_megatron_param_globs excludes vision-tower weights (pytest, 1 GPU)
-#   T2.5  Optimizer state excludes vision tower; peak memory check (1 GPU)
+#   T2.2  init_vision_model=False yields no vision params/buffers in the model (1 GPU)
+#   T2.5  Optimizer state contains only LM params; peak memory check (1 GPU)
 #   T2.6  LM weight parity vs HF checkpoint (1 GPU)
 #   T2.7  Checkpoint save-and-resume (1 GPU)
 #   T2.8  TP=2 and PP=2 smoke tests (2 GPUs each)
@@ -26,16 +26,12 @@
 set -xeuo pipefail
 
 # ---------------------------------------------------------------------------
-# T2.2 — skip_megatron_param_globs vision-tower exclusion (pytest, single GPU)
+# T2.2 — init_vision_model=False: no vision params/buffers in the Megatron model
 # ---------------------------------------------------------------------------
 export CUDA_VISIBLE_DEVICES="0"
 
-uv run coverage run \
-    --data-file=/opt/Megatron-Bridge/.coverage \
-    --source=/opt/Megatron-Bridge/ \
-    --parallel-mode \
-    -m pytest \
-    -o log_cli=true -o log_cli_level=INFO -v -s -x -m "not pleasefixme" --tb=short -rA \
+uv run python -m torch.distributed.run \
+    --nproc_per_node=1 --nnodes=1 --master_port=29701 \
     tests/functional_tests/test_groups/models/qwen_vl/test_qwen35_llm_sft_skip_vision.py
 
 # ---------------------------------------------------------------------------

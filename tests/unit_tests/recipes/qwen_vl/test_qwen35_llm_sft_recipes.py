@@ -47,6 +47,7 @@ class _FakeModelCfg:
         self.freeze_vision_model = True
         self.freeze_vision_projection = True
         self.mtp_num_layers = None
+        self.init_vision_model = True
 
     def finalize(self):
         return None
@@ -57,9 +58,8 @@ class _FakeAutoBridge:
     def from_hf_pretrained(hf_path: str):
         return _FakeAutoBridge()
 
-    def to_megatron_provider(self, load_weights: bool = False, skip_megatron_param_globs: list[str] | None = None):
+    def to_megatron_provider(self, load_weights: bool = False):
         assert load_weights is True
-        assert skip_megatron_param_globs == list(_qwen35_llm_module.QWEN35_LLM_SFT_SKIP_VISION_GLOBS)
         return _FakeModelCfg()
 
 
@@ -73,6 +73,8 @@ def _assert_basic_config(cfg):
     assert cfg.model.freeze_vision_model is True
     assert cfg.model.freeze_vision_projection is True
     assert cfg.model.mtp_num_layers is None
+    # Vision tower is not instantiated — peak memory reflects the LLM only.
+    assert cfg.model.init_vision_model is False
 
 
 @pytest.mark.parametrize("recipe_func", _LLM_SFT_FUNCS)
@@ -80,7 +82,3 @@ def test_each_qwen35_llm_sft_recipe_builds_config(recipe_func: Callable[..., Any
     monkeypatch.setattr(_qwen35_llm_module, "AutoBridge", _FakeAutoBridge)
     cfg = recipe_func("dummy/hf/path")
     _assert_basic_config(cfg)
-
-
-def test_qwen35_llm_skip_vision_globs_exported():
-    assert "*vision_model*" in _qwen35_llm_module.QWEN35_LLM_SFT_SKIP_VISION_GLOBS

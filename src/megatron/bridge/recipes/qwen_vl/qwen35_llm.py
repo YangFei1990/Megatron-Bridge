@@ -14,10 +14,13 @@
 
 """Qwen3.5 text-only (LLM) SFT recipes for Qwen3.5-VL checkpoints.
 
-Loads **language-model weights only** from a HuggingFace Qwen3.5-VL checkpoint via
-``skip_megatron_param_globs`` (vision tower keeps initialization values). Uses
-``_sft_common`` defaults: SQuAD, HuggingFace tokenizer, and ``vlm_step``-compatible
-text batches (no ``hf_processor_path``).
+Loads **language-model weights only** from a HuggingFace Qwen3.5-VL checkpoint.
+The vision tower is never instantiated (``init_vision_model=False``), so the
+vision parameters are absent from the Megatron model — they are neither
+allocated on GPU nor loaded from the checkpoint. The language model is the
+standard ``GPTModel`` (specifically ``Qwen3VLGPTModel``, a ``GPTModel`` subclass
+that adds mRoPE) wrapped under ``model.language_model``; the wrapper has no
+vision attribute.
 
 Train with ``megatron.bridge.training.vlm_step.forward_step``.
 """
@@ -32,10 +35,6 @@ from megatron.bridge.recipes.qwen_vl.qwen35_vl import (
 )
 from megatron.bridge.recipes.utils.optimizer_utils import distributed_fused_adam_with_cosine_annealing
 from megatron.bridge.training.config import ConfigContainer
-
-
-# Megatron parameter name substrings for Qwen3-VL-shaped models (vision tower).
-QWEN35_LLM_SFT_SKIP_VISION_GLOBS: tuple[str, ...] = ("*vision_model*",)
 
 
 def _qwen35_llm_sft_apply_common(
@@ -53,11 +52,13 @@ def _qwen35_llm_sft_apply_common(
     """Apply Qwen3.5 LLM-only SFT settings on top of ``_sft_common``."""
     seq_len = cfg.dataset.seq_length
 
-    cfg.model = AutoBridge.from_hf_pretrained(hf_path).to_megatron_provider(
-        load_weights=True,
-        skip_megatron_param_globs=list(QWEN35_LLM_SFT_SKIP_VISION_GLOBS),
-    )
+    cfg.model = AutoBridge.from_hf_pretrained(hf_path).to_megatron_provider(load_weights=True)
     cfg.model.seq_length = seq_len
+
+    # Skip instantiation of the vision tower entirely. Tasks for vision
+    # parameters never reach the loader because those parameters are absent
+    # from the Megatron model.
+    cfg.model.init_vision_model = False
 
     cfg.model.tensor_model_parallel_size = tp
     cfg.model.pipeline_model_parallel_size = pp

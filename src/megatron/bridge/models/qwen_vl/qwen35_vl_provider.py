@@ -175,6 +175,11 @@ class Qwen35VLModelProvider(GPTModelProvider):
 
     mtp_num_layers: Optional[int] = None
 
+    # When False, the vision tower is not instantiated. Used by LLM-only SFT
+    # recipes that load language-model weights from a Qwen3.5-VL checkpoint —
+    # vision parameters are never allocated, so peak memory reflects the LLM only.
+    init_vision_model: bool = True
+
     def __post_init__(self):
         _check_qwen3_5_available()
         if self.vision_config is None:
@@ -203,6 +208,7 @@ class Qwen35VLModelProvider(GPTModelProvider):
             vision_transformer_config=hf_vision_config,
             pre_process=pre_process,
             post_process=post_process,
+            add_encoder=self.init_vision_model,
             pg_collection=self._pg_collection,
             mtp_block_spec=mtp_spec,
             vp_stage=vp_stage,
@@ -342,6 +348,11 @@ class Qwen35VLMoEModelProvider(GPTModelProvider):
 
     mtp_num_layers: Optional[int] = None
 
+    # When False, the vision tower is not instantiated. Used by LLM-only SFT
+    # recipes that load language-model weights from a Qwen3.5-VL checkpoint —
+    # vision parameters are never allocated, so peak memory reflects the LLM only.
+    init_vision_model: bool = True
+
     def __post_init__(self):
         _check_qwen3_5_moe_available()
         if self.vision_config is None:
@@ -393,6 +404,7 @@ class Qwen35VLMoEModelProvider(GPTModelProvider):
             vision_transformer_config=hf_vision_config,
             pre_process=pre_process,
             post_process=post_process,
+            add_encoder=self.init_vision_model,
             pg_collection=self._pg_collection,
             mtp_block_spec=mtp_spec,
             vp_stage=vp_stage,
