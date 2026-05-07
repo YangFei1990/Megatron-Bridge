@@ -15,7 +15,7 @@ overall release timeline.
 
 This policy is in effect from the moment a release branch is cut (start
 of code-freeze) until release day. Outside of that window, the normal
-contribution rules in [CONTRIBUTING.md](../../CONTRIBUTING.md) apply.
+contribution rules in [CONTRIBUTING.md](https://github.com/NVIDIA-NeMo/Megatron-Bridge/blob/main/CONTRIBUTING.md) apply.
 
 It applies identically to both repositories above. "Cherrypick" here
 means any commit landing on a release branch, regardless of whether it
