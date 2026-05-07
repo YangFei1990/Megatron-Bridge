@@ -110,7 +110,6 @@ jobs:
       extra-no-build-isolation-packages: "grpcio-tools"
       restrict-to-admins: true
     secrets: inherit
-      S3_BUCKET_NAME: ${{ secrets.S3_BUCKET_NAME }}
 
   release-summary:
     needs: [pre-flight, release]
