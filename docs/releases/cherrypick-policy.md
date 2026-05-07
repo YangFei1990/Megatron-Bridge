@@ -97,9 +97,7 @@ underlying issue is later handled on `main`.
 ### Out-of-scope merges during Phase 1
 
 Performance scripts and documentation may continue to land normally
-during Phase 1. Authors should still flag the target release branch in
-the PR description so the automation team can track what is going onto
-the branch.
+during Phase 1.
 
 -----
 
