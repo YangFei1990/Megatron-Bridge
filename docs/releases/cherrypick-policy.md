@@ -53,17 +53,18 @@ rules.
 
 ### In scope (fixes only during Phase 1)
 
-- Source code of `NVIDIA/Megatron-LM`
-- Source code of `NVIDIA-NeMo/Megatron-Bridge`
-- Tutorials and examples in either repository
+Source code, tutorials, and examples in either repository:
 
-For these areas, only **fixes** may be cherrypicked during Phase 1.
+- **`NVIDIA/Megatron-LM`** — `megatron/` (package source), `examples/`
+- **`NVIDIA-NeMo/Megatron-Bridge`** — `src/megatron/bridge/` (package source), `examples/`, `tutorials/`
+
+For these paths, only **fixes** may be cherrypicked during Phase 1.
 Feature work does not land on release branches.
 
 ### Out of scope (any-allowed during Phase 1)
 
-- Performance scripts
-- Documentation
+- **Performance scripts** — e.g. `scripts/performance/` in Megatron-Bridge, and any equivalent benchmarking-only directories in Megatron-LM.
+- **Documentation** — `docs/` in either repo, plus top-level Markdown (`README.md`, `CONTRIBUTING.md`, `AGENTS.md`, `CLAUDE.md`, etc.).
 
 Out-of-scope commits may continue to merge throughout Phase 1. They stop
 being acceptable as soon as Phase 2 begins — at that point everything,
