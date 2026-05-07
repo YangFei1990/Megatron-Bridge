@@ -87,10 +87,12 @@ state:
 - What testing was performed to verify the fix is contained.
 
 Any indication that a fix may be a **breaking change** must be tested
-**ahead of merge**, not after. A confirmed breaking change leads to
-**rejection of the cherrypick** — it does not land on the release
-branch, regardless of how the underlying issue is later handled on
-`main`.
+**ahead of merge**, not after. **The waiving authority (currently the
+automation team) runs this testing** — verification of breaking-change
+risk is part of the waiving authority's role, not the author's. A
+confirmed breaking change leads to **rejection of the cherrypick** —
+it does not land on the release branch, regardless of how the
+underlying issue is later handled on `main`.
 
 ### Out-of-scope merges during Phase 1
 
