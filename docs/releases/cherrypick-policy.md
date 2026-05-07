@@ -60,7 +60,7 @@ rules.
 For these areas, only **fixes** may be cherrypicked during Phase 1.
 Feature work does not land on release branches.
 
-### Out of scope (allowed during Phase 1)
+### Out of scope (any-allowed during Phase 1)
 
 - Performance scripts
 - Documentation
