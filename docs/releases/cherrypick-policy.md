@@ -34,11 +34,14 @@ rules.
 | **Phase 1 — Code-freeze** | 10 business days; begins on a Monday and ends on the Friday of the following week | Fixes only on in-scope code; out-of-scope changes still allowed |
 | **Phase 2 — Absolute freeze** | End of code-freeze through release day | Only changes recommended by QA or the automation team |
 
-In **both phases**, **only the automation team is responsible for
-waiving cherrypicks onto the release branches**. No other team — not
-authors, not code reviewers, not QA — can waive a cherrypick on their
-own. Code review, blast-radius assessment, and QA recommendations are
-inputs to the automation team's decision, never substitutes for it.
+In **both phases**, a **single authority is responsible for waiving
+cherrypicks onto the release branches**. **This authority is currently
+held by the automation team**, but the role is intentionally separable
+from any specific team — if ownership moves in the future, the rule
+itself does not change. No other party — not authors, not code
+reviewers, not QA — can waive a cherrypick on their own. Code review,
+blast-radius assessment, and QA recommendations are inputs to the
+waiving authority's decision, never substitutes for it.
 
 -----
 
@@ -116,8 +119,8 @@ To raise such a change:
 3. Link the QA finding or automation ticket that justifies the change.
 
 A QA recommendation is what *initiates* a Phase 2 cherrypick. It is not
-itself a waiver — only the automation team can waive a cherrypick onto
-the release branch.
+itself a waiver — only the waiving authority (currently the automation
+team) can waive a cherrypick onto the release branch.
 
 -----
 
@@ -128,8 +131,8 @@ the release branch.
 | **Phase 1 — Code-freeze** | Fixes only; blast-radius assessed; confirmed breaking changes rejected | Allowed | Allowed |
 | **Phase 2 — Absolute freeze** | QA / automation-recommended only | QA / automation-recommended only | QA / automation-recommended only |
 
-In every cell above, the automation team is the sole waiver of the
-cherrypick onto the release branch.
+In every cell above, the waiving authority — currently the automation
+team — is the sole waiver of the cherrypick onto the release branch.
 
 -----
 
