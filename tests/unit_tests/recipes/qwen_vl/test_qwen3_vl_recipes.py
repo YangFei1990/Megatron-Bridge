@@ -578,6 +578,7 @@ def test_qwen3_vl_8b_peft_energon_task_encoder(monkeypatch: pytest.MonkeyPatch):
     assert cfg.dataset.max_num_frames == 60
     assert cfg.dataset.max_visual_tokens == 16384
 
+
 # =============================================================================
 # Qwen3-VL Pretrain Mock Config Tests
 # =============================================================================
