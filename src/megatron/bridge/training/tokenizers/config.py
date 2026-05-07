@@ -80,5 +80,3 @@ class TokenizerConfig(MTrainTokenizerConfig):
                 "`sp_tokenizer_kwargs` is deprecated and will be removed soon. "
                 "Please, use `tokenizer_sentencepiece_legacy` (bool) argument directly instead."
             )
-
-        super().__post_init__()
