@@ -379,6 +379,7 @@ class DeepSeekV4Bridge(MegatronModelBridge):
 
         # ---- Hyper-Connections (mHC) ----
         provider.enable_hyper_connections = True
+        provider.use_fused_mhc = True
         provider.num_residual_streams = hf_config.hc_mult  # 4
         provider.mhc_sinkhorn_iterations = hf_config.hc_sinkhorn_iters  # 20
 
