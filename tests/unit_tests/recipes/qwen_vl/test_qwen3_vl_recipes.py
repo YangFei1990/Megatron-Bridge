@@ -574,7 +574,9 @@ def test_qwen3_vl_8b_peft_energon_task_encoder(monkeypatch: pytest.MonkeyPatch):
     assert isinstance(cfg.dataset.task_encoder, QwenVLTaskEncoder)
     assert cfg.dataset.min_pixels == 200704
     assert cfg.dataset.max_pixels == 1003520
-
+    assert cfg.dataset.max_num_images == 10
+    assert cfg.dataset.max_num_frames == 60
+    assert cfg.dataset.max_visual_tokens == 16384
 
 # =============================================================================
 # Qwen3-VL Pretrain Mock Config Tests
