@@ -164,7 +164,7 @@ class TestQwenVLTaskEncoder(unittest.TestCase):
         self.encoder = QwenVLTaskEncoder(
             tokenizer=self.tokenizer,
             image_processor=self.image_processor,
-            max_padding_length=128,
+            max_padding_length=512,
             patch_size=14,
             spatial_merge_size=2,
         )
@@ -184,10 +184,10 @@ class TestQwenVLTaskEncoder(unittest.TestCase):
         def processor_side_effect(images=None, videos=None, **kwargs):
             res = {}
             if images:
-                res["image_grid_thw"] = np.array([[1, 28, 28]])  # 1 tile, 28x28
+                res["image_grid_thw"] = torch.tensor([[1, 28, 28]])  # 1 tile, 28x28
                 res["pixel_values"] = torch.randn(1, 3, 28, 28)
             if videos:
-                res["video_grid_thw"] = np.array([[1, 28, 28]])
+                res["video_grid_thw"] = torch.tensor([[1, 28, 28]])
                 res["pixel_values_videos"] = torch.randn(1, 3, 28, 28)
             return res
 
@@ -243,10 +243,10 @@ class TestQwenVLTaskEncoder(unittest.TestCase):
         def processor_side_effect(images=None, videos=None, **kwargs):
             res = {}
             if images:
-                res["image_grid_thw"] = np.array([[1, 28, 28]])
+                res["image_grid_thw"] = torch.tensor([[1, 28, 28]])
                 res["pixel_values"] = torch.randn(1, 3, 28, 28)
             if videos:
-                res["video_grid_thw"] = np.array([[1, 28, 28]])
+                res["video_grid_thw"] = torch.tensor([[1, 28, 28]])
                 res["pixel_values_videos"] = torch.randn(1, 3, 28, 28)
             return res
 
