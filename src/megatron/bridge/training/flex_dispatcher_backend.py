@@ -28,10 +28,12 @@ def apply_flex_dispatcher_backend(
     model_config: TransformerConfig,
     moe_flex_dispatcher_backend: str | None = None,
 ) -> None:
-    """Apply DeepEP or HybridEP optimizations to the model config.
+    """Apply DeepEP, HybridEP, or NCCL EP optimizations to the model config.
 
     DeepEP is applicable only for MoE models on Ampere, Hopper, B200 and B300 GPUs.
     HybridEP is applicable only for MoE models on GB200, GB300 with NVL72 and on Ampere, Hopper, B200 and B300 GPUs.
+    NCCL EP is applicable only for MoE models on Hopper and newer GPUs, and requires a TransformerEngine
+    build with NCCL EP support and ``moe_expert_rank_capacity_factor`` to be set.
     """
     num_moe_experts = getattr(model_config, "num_moe_experts", None)
     if num_moe_experts is None or num_moe_experts == 0:
@@ -62,6 +64,14 @@ def apply_flex_dispatcher_backend(
                     f"Current GPU: {device_properties.name}. Skipping HybridEP configuration."
                 )
             return
+    elif moe_flex_dispatcher_backend == "ncclep":
+        if device_properties.major < 9:
+            if get_rank_safe() == 0:
+                logger.warning(
+                    f"NCCL EP is only applicable to Hopper and newer GPUs. "
+                    f"Current GPU: {device_properties.name}. Skipping NCCL EP configuration."
+                )
+            return
     else:
         if get_rank_safe() == 0:
             logger.warning("Not a valid flex dispatcher backend. Skipping flex dispatcher backend configuration.")
@@ -89,4 +99,10 @@ def validate_flex_dispatcher_backend(model_config: TransformerConfig) -> None:
             if not device_properties.major in [8, 9, 10]:
                 raise ValueError(
                     "HybridEP is supported for GB200, GB300 with NVL72 and for Ampere, Hopper, B200 and B300 GPUs"
+                )
+
+        if model_config.moe_flex_dispatcher_backend == "ncclep":
+            if device_properties.major < 9:
+                raise ValueError(
+                    f"NCCL EP is supported for Hopper and newer GPUs. Current GPU: {device_properties.name}"
                 )

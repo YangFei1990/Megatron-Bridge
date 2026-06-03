@@ -200,4 +200,14 @@ def _maybe_destroy_process_group(should_destroy: bool) -> None:
     """
     if should_destroy and dist.is_initialized():
         dist.barrier()
+        # Release any NCCL EP context (the 'ncclep' flex dispatcher) before tearing down the
+        # process group's communicator. TE registers an atexit ep_finalize that would otherwise
+        # run after this and hit a "corrupted comm object" at exit. No-op when NCCL EP was never
+        # bootstrapped; guarded so non-ncclep / stock-mcore runs are unaffected.
+        try:
+            from megatron.core.transformer.moe.fused_a2a import nccl_ep_finalize
+
+            nccl_ep_finalize()
+        except Exception:
+            pass
         dist.destroy_process_group()

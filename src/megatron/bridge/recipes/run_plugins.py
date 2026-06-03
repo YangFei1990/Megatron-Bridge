@@ -640,7 +640,7 @@ class PerfEnvPlugin(Plugin):
         self.dp_size = self.num_gpus // (self.tp_size * self.cp_size * self.pp_size)
 
         cuda_device_max_connections = 8
-        if self.moe_flex_dispatcher_backend in ["deepep", "hybridep"]:
+        if self.moe_flex_dispatcher_backend in ["deepep", "hybridep", "ncclep"]:
             cuda_device_max_connections = 32
         if self.gpu_sm100_or_newer:
             if (self.tp_size > 1 or self.cp_size > 1) and (self.dp_size > 1 or self.pp_size > 1):
