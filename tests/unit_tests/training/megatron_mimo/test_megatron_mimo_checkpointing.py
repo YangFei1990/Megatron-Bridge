@@ -70,6 +70,8 @@ def _make_global_state(
                 exit_duration_in_mins=exit_duration_in_mins,
                 exit_interval=exit_interval,
                 eval_interval=None,
+                manual_gc=False,
+                manual_gc_interval=0,
             ),
             dataset=SimpleNamespace(seq_length=128),
             checkpoint=SimpleNamespace(
@@ -285,7 +287,10 @@ class TestPretrainMegatronMIMOSetup:
 
         with (
             patch("megatron.bridge.models.megatron_mimo.build_megatron_mimo_model", return_value=(model, infra)),
-            patch("megatron.core.models.mimo.optimizer.get_mimo_optimizer", return_value=mock_optimizer),
+            patch(
+                "megatron.core.models.mimo.optimizer.get_mimo_optimizer",
+                return_value=mock_optimizer,
+            ) as mock_get_mimo_optimizer,
             patch("megatron.core.num_microbatches_calculator._GLOBAL_NUM_MICROBATCHES_CALCULATOR", None),
             patch("megatron.core.num_microbatches_calculator.init_num_microbatches_calculator"),
             patch("megatron.core.parallel_state._TENSOR_MODEL_PARALLEL_GROUP", None),
@@ -296,6 +301,7 @@ class TestPretrainMegatronMIMOSetup:
             result = setup_megatron_mimo(state=global_state)
 
         mock_create_ckpt_mgr.assert_called_once_with(cfg.checkpoint)
+        mock_get_mimo_optimizer.assert_called_once_with(unwrapped, cfg.optimizer)
         global_state.initialize_async_checkpoint_worker.assert_called_once()
         assert result.checkpoint_manager is mock_mgr_instance
 
@@ -381,6 +387,67 @@ class TestNonColocatedGuard:
                 multimodule_communicator=Mock(),
                 checkpoint_manager=MagicMock(),
             )
+
+
+# ---------------------------------------------------------------------------
+# Tests: evaluation timer ownership in train_megatron_mimo
+# ---------------------------------------------------------------------------
+
+
+def test_interval_evaluation_uses_evaluator_timer_ownership():
+    """Interval evaluation should let the shared evaluator own its timer."""
+    from megatron.core.timers import Timers
+
+    from megatron.bridge.training.train_megatron_mimo import train_megatron_mimo
+
+    state = _make_global_state(train_iters=1)
+    state.cfg.train.eval_interval = 1
+    state.timers = Timers(log_level=0, log_option="minmax")
+
+    infra = _make_megatron_mimo_infra()
+    checkpoint_manager = MagicMock()
+
+    def run_shared_evaluator(*_args, **_kwargs):
+        timer = state.timers("evaluate", log_level=0)
+        timer.start(barrier=True)
+        timer.stop()
+
+    with (
+        patch("torch.cuda.synchronize"),
+        patch("torch.distributed.barrier"),
+        patch("torch.distributed.get_rank", return_value=0),
+        patch("torch.distributed.get_world_size", return_value=1),
+        patch("megatron.bridge.training.train_megatron_mimo.get_num_microbatches", return_value=1),
+        patch("megatron.bridge.training.train_megatron_mimo.prepare_forward_step_func", return_value=Mock()),
+        patch("megatron.bridge.training.train_megatron_mimo.get_module_to_grid_tuple", return_value=[]),
+        patch(
+            "megatron.bridge.training.train_megatron_mimo.build_pg_collection_for_schedule",
+            return_value=Mock(spec=[]),
+        ),
+        patch(
+            "megatron.bridge.training.train_megatron_mimo.train_step_megatron_mimo",
+            return_value=({}, 0, 0.0, 0),
+        ),
+        patch(
+            "megatron.bridge.training.train_megatron_mimo.evaluate_and_print_results",
+            side_effect=run_shared_evaluator,
+        ) as mock_evaluate,
+        patch("megatron.bridge.training.train_megatron_mimo.checkpoint_and_decide_exit", return_value=False),
+    ):
+        train_megatron_mimo(
+            forward_step_func=Mock(),
+            model=Mock(),
+            optimizer=Mock(),
+            schedulers={},
+            train_data_iterator=iter([object()]),
+            valid_data_iterator=iter([object()]),
+            global_state=state,
+            megatron_mimo_infra=infra,
+            multimodule_communicator=Mock(),
+            checkpoint_manager=checkpoint_manager,
+        )
+
+    mock_evaluate.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
@@ -975,6 +1042,36 @@ class TestLoadCheckpointPgThreading:
                 )
                 _, kwargs = m_inner.call_args
                 assert kwargs["pg_collection"] is None
+
+
+class TestNoMimoLoadOptimizerSkip:
+    """Regression guard: `_load_checkpoint_from_path` must not skip
+    `optimizer.load_state_dict()` for MIMO + GLOBAL torch_dist checkpoints.
+
+    The skip was historically present to work around per-rank common-state
+    divergence, but MimoOptimizer now handles that internally via
+    `_mimo_param_groups` / `_mimo_grad_scaler` ShardedObjects. Re-adding the
+    skip silently drops Adam's step counter and grad_scaler on resume.
+    """
+
+    def test_no_skip_pattern_in_load_optimizer_branch(self):
+        from megatron.bridge.training.checkpointing import _load_checkpoint_from_path
+
+        src = inspect.getsource(_load_checkpoint_from_path)
+        assert "optimizer.load_state_dict" in src, "Sanity check: load_state_dict call should still exist."
+        # The previous skip was: `if not (ckpt_type == CheckpointType.GLOBAL and _is_megatron_mimo):`
+        # Catch literal re-introduction and obvious equivalents.
+        forbidden_patterns = [
+            "CheckpointType.GLOBAL and _is_megatron_mimo",
+            "_is_megatron_mimo and ckpt_type == CheckpointType.GLOBAL",
+        ]
+        offenders = [p for p in forbidden_patterns if p in src]
+        assert not offenders, (
+            f"MIMO load-optimizer skip pattern detected ({offenders}). "
+            "MimoOptimizer.load_state_dict handles per-rank common state via "
+            "_mimo_param_groups / _mimo_grad_scaler ShardedObjects; the skip "
+            "must not be re-introduced or it will silently drop Adam step + grad_scaler."
+        )
 
 
 # ---------------------------------------------------------------------------

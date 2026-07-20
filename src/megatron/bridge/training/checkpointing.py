@@ -15,7 +15,6 @@
 """Input/output checkpointing."""
 
 import contextlib
-import inspect
 import os
 import random
 import shutil
@@ -34,17 +33,17 @@ import torch
 import torch.nn.functional as F
 from megatron.core import dist_checkpointing, tensor_parallel
 from megatron.core.dist_checkpointing.mapping import ShardedObject, ShardedStateDict, ShardedTensor
-from megatron.core.dist_checkpointing.serialization import (
-    StateDict,
-    get_default_load_sharded_strategy,
-    get_default_save_sharded_strategy,
-)
+from megatron.core.dist_checkpointing.serialization import StateDict
 from megatron.core.dist_checkpointing.strategies.async_utils import AsyncRequest
 from megatron.core.dist_checkpointing.strategies.fully_parallel import (
     FullyParallelLoadStrategyWrapper,
     FullyParallelSaveStrategyWrapper,
 )
-from megatron.core.dist_checkpointing.strategies.torch import TorchDistSaveShardedStrategy, _get_filesystem_reader
+from megatron.core.dist_checkpointing.strategies.torch import (
+    TorchDistLoadShardedStrategy,
+    TorchDistSaveShardedStrategy,
+    _get_filesystem_reader,
+)
 from megatron.core.dist_checkpointing.utils import _clean_metadata_for_serialization
 from megatron.core.msc_utils import MultiStorageClientFeature
 from megatron.core.num_microbatches_calculator import update_num_microbatches
@@ -78,6 +77,7 @@ from megatron.bridge.training.utils.checkpoint_utils import (
     get_checkpoint_tracker_filename,
     get_checkpoint_train_state_filename,
     is_checkpoint_iteration_directory,
+    is_hf_checkpoint_dir,
     read_run_config,
     read_train_state,
 )
@@ -89,6 +89,7 @@ from megatron.bridge.utils.common_utils import (
     print_rank_0,
 )
 from megatron.bridge.utils.import_utils import safe_import
+from megatron.bridge.utils.instantiate_utils import _validate_target_prefix
 
 
 _, HAVE_RESIL = safe_import("nvidia_resiliency_ext.checkpointing")
@@ -134,11 +135,27 @@ _CHECKPOINT_VERSION = None
 logger = getLogger(__name__)
 _NON_PERSISTENT_CKPT_SUBDIR = "non_persistent"
 _DIRECT_ITERATION_DIR_SENTINEL = -2
+_CHECKPOINT_CLEANUP_LOCK = threading.Lock()
+
+HF_WEIGHTS_SUBDIR = "hf"
 
 
 # ============================================================================
 # Checkpoint version and utilities
 # ============================================================================
+
+
+def _has_global_non_persistent_checkpoint(load_dir: str | None, ckpt_cfg: CheckpointConfig) -> bool:
+    """Return whether the configured global non-persistent checkpoint source exists."""
+    if ckpt_cfg.non_persistent_ckpt_type != "global":
+        return False
+
+    non_persistent_global_dir = (
+        ckpt_cfg.non_persistent_global_ckpt_dir
+        if ckpt_cfg.non_persistent_global_ckpt_dir or load_dir is None
+        else os.path.join(load_dir, _NON_PERSISTENT_CKPT_SUBDIR)
+    )
+    return checkpoint_exists(non_persistent_global_dir)
 
 
 def set_checkpoint_version(value: float) -> None:
@@ -209,7 +226,7 @@ def _get_checkpoint_format(checkpoint_path: str) -> str:
         checkpoint_path: Path to the checkpoint directory.
 
     Returns:
-        The checkpoint format string.
+        The checkpoint format string. One of ``"torch_dist"``, ``"fsdp_dtensor"`` or ``"hf"``.
     """
     # Check for Megatron Core distributed checkpoint first
     if dist_checkpointing.check_is_distributed_checkpoint(checkpoint_path):
@@ -227,8 +244,14 @@ def _get_checkpoint_format(checkpoint_path: str) -> str:
     if is_torch_dcp:
         # Assume fsdp_dtensor for PyTorch DCP format
         return "fsdp_dtensor"
-    else:
-        raise NotImplementedError(f"Unknown checkpoint format in {checkpoint_path}")
+
+    # HuggingFace full-model format (raw HF repo OR the extra ``iter_*/hf`` export written
+    # by Bridge with ``also_save_hf_checkpoint=True``).
+    if is_hf_checkpoint_dir(checkpoint_path):
+        print_rank_0(f" Auto-detected checkpoint format as 'hf' from {checkpoint_path}.")
+        return "hf"
+
+    raise NotImplementedError(f"Unknown checkpoint format in {checkpoint_path}")
 
 
 def find_checkpoint_rank_0(checkpoints_path: str, iteration: int, release: bool = False) -> Optional[str]:
@@ -376,15 +399,14 @@ def maybe_finalize_async_save(
         return
 
     async_queue = global_state.async_calls_queue
-    if async_queue is None:
-        return
 
     if blocking and not is_empty_async_queue(global_state):
         print_rank_0("Unfinalized async checkpoint saves. Finalizing them synchronously now.")
 
-    async_queue.maybe_finalize_async_calls(blocking)
+    if async_queue is not None:
+        async_queue.maybe_finalize_async_calls(blocking)
 
-    if terminate:
+    if terminate and async_queue is not None:
         async_queue.close()
 
 
@@ -395,12 +417,12 @@ def is_empty_async_queue(global_state: GlobalState) -> bool:
         global_state: The global training state containing the async calls queue.
 
     Returns:
-        bool: True if there is any ongoing async call.
+        bool: True if there is no in-flight async checkpoint work.
     """
     async_queue = global_state.async_calls_queue
-    if async_queue is None:
-        return True
-    return async_queue.get_num_unfinalized_calls() == 0
+    if async_queue is not None and async_queue.get_num_unfinalized_calls() > 0:
+        return False
+    return True
 
 
 def get_save_and_finalize_callbacks(writer, save_state_dict_ret) -> NVRxAsyncRequest:
@@ -746,6 +768,11 @@ def create_checkpoint_manager(checkpoint_config: CheckpointConfig) -> Checkpoint
                 f"Expected fully qualified class name like 'mypackage.module.ClassName'."
             ) from err
 
+        _validate_target_prefix(
+            target=checkpoint_config.custom_manager_class,
+            full_key="checkpoint.custom_manager_class",
+        )
+
         try:
             module = importlib.import_module(module_path)
         except ImportError as e:
@@ -767,6 +794,249 @@ def create_checkpoint_manager(checkpoint_config: CheckpointConfig) -> Checkpoint
         return manager
 
     return DefaultCheckpointManager(checkpoint_config)
+
+
+# ============================================================================
+# HuggingFace sidecar export helpers (also_save_hf_checkpoint=True)
+# ============================================================================
+
+
+def _resolve_hf_source(cfg: ConfigContainer) -> Optional[str]:
+    """Resolve the HuggingFace model identifier / local path used as a template.
+
+    Resolution order (first non-empty wins):
+      1. ``cfg.checkpoint.hf_source_path`` — explicit override.
+      2. ``cfg.model.hf_model_id`` — populated by ``AutoBridge.to_megatron_provider`` (preferred).
+      3. ``cfg.tokenizer.tokenizer_model`` — may be a tokenizer file path; only used as fallback when
+         the above are unset (recipes that point this at an HF model id still work).
+
+    Returns ``None`` when no source could be determined.
+    """
+    if cfg is None:
+        return None
+    ckpt_cfg = getattr(cfg, "checkpoint", None)
+    if ckpt_cfg is not None and getattr(ckpt_cfg, "hf_source_path", None):
+        return ckpt_cfg.hf_source_path
+    model_cfg = getattr(cfg, "model", None)
+    if model_cfg is not None:
+        hf_id = getattr(model_cfg, "hf_model_id", None)
+        if hf_id:
+            return hf_id
+    tokenizer_cfg = getattr(cfg, "tokenizer", None)
+    if tokenizer_cfg is not None and getattr(tokenizer_cfg, "tokenizer_model", None):
+        return tokenizer_cfg.tokenizer_model
+    return None
+
+
+_AUTO_BRIDGE_CACHE: dict[tuple[str, bool], Any] = {}
+
+
+def _clear_auto_bridge_cache() -> None:
+    """Clear cached AutoBridge instances for tests or multi-stage in-process runs."""
+    _AUTO_BRIDGE_CACHE.clear()
+
+
+def _build_auto_bridge_for_save(cfg: ConfigContainer, hf_source: Optional[str] = None):
+    """Build (or fetch from cache) an ``AutoBridge`` instance from the resolved HF source path.
+
+    Raises:
+        ValueError: When no HF source could be resolved.
+    """
+    from megatron.bridge.models.conversion.auto_bridge import AutoBridge
+
+    source = hf_source or _resolve_hf_source(cfg)
+    if not source:
+        raise ValueError(
+            "also_save_hf_checkpoint=True requires an HF source to template config/tokenizer files. "
+            "Set cfg.checkpoint.hf_source_path, cfg.model.hf_model_id "
+            "(via AutoBridge / recipe metadata), or cfg.tokenizer.tokenizer_model when it points at "
+            "an HF model id."
+        )
+    trust_remote_code = bool(getattr(cfg.checkpoint, "hf_trust_remote_code", False))
+    cache_key = (str(source), bool(trust_remote_code))
+    bridge = _AUTO_BRIDGE_CACHE.get(cache_key)
+    if bridge is None:
+        bridge = AutoBridge.from_hf_pretrained(source, trust_remote_code=trust_remote_code)
+        _AUTO_BRIDGE_CACHE[cache_key] = bridge
+    return bridge
+
+
+def _hf_weights_dir(iter_dir: str) -> str:
+    """Sub-directory under ``iter_*/`` that stores exported HuggingFace weights."""
+    return os.path.join(iter_dir, HF_WEIGHTS_SUBDIR)
+
+
+def _save_hf_weights(
+    state: GlobalState,
+    model: list[MegatronModule],
+    iter_dir: str,
+) -> None:
+    """Save model weights as a HuggingFace directory under ``iter_dir``.
+
+    All ranks participate in the bridge's streaming export generator (collectives).
+    Rank 0 performs streaming safetensors I/O via ``SafeTensorsStateSource.save_generator``.
+    When ``hf_distributed_save=True``, writes are spread across ranks synchronously.
+
+    HF weight I/O completes on the main thread for collective safety.  This includes
+    PEFT adapter exports, which are small and share the same collective constraints.
+
+    PEFT-aware: when ``cfg.peft is not None`` this delegates to
+    :func:`_save_hf_adapter_weights`.
+    """
+    cfg = state.cfg
+    ckpt_cfg = cfg.checkpoint
+
+    if cfg.peft is not None:
+        _save_hf_adapter_weights(state, model, iter_dir)
+        return
+
+    hf_source = _resolve_hf_source(cfg)
+    bridge = _build_auto_bridge_for_save(cfg, hf_source=hf_source)
+    model_bridge = bridge._model_bridge
+    if not model_bridge.SUPPORTS_HF_PRETRAINED_EXPORT:
+        raise NotImplementedError(
+            f"{type(model_bridge).__name__} does not support standalone Hugging Face checkpoint export."
+        )
+    distributed_save = bool(getattr(ckpt_cfg, "hf_distributed_save", False))
+    save_every_n_ranks = int(getattr(ckpt_cfg, "hf_save_every_n_ranks", 1))
+
+    is_distributed = torch.distributed.is_available() and torch.distributed.is_initialized()
+    rank = torch.distributed.get_rank() if is_distributed else 0
+
+    if rank == 0:
+        ensure_directory_exists(iter_dir, check_parent=False)
+    if is_distributed:
+        torch.distributed.barrier()
+
+    if get_rank_safe() == 0:
+        logger.warning(
+            "also_save_hf_checkpoint=True performs full-model HuggingFace export synchronously on the "
+            "checkpoint save critical path. This can considerably slow down checkpoint saving and is "
+            "intended for small models or debugging. For larger models, run a separate background "
+            "conversion job that scans for new native Megatron checkpoints."
+        )
+        logger.info(
+            "Saving HuggingFace full model weights to %s (hf_source=%s, distributed_save=%s, "
+            "hf_save_every_n_ranks=%s)",
+            iter_dir,
+            hf_source,
+            distributed_save,
+            save_every_n_ranks,
+        )
+
+    hf_export_t0 = time()
+    # Step 1: gather full HF tensors (collectives on the main process)
+    raw_generator = bridge.export_hf_weights(
+        model,
+        cpu=True,
+        show_progress=False,
+        merge_adapter_weights=True,
+    )
+
+    # Step 2 depends on async behaviour
+    state_source = getattr(bridge.hf_pretrained, "state", None)
+    state_source = getattr(state_source, "source", None)
+    if state_source is None or not hasattr(state_source, "save_generator"):
+        raise RuntimeError(
+            "The HF source does not expose a SafeTensorsStateSource; cannot save weights in 'hf' format."
+        )
+
+    if distributed_save:
+        # ``save_generator`` already implements per-rank distributed writes; we
+        # cannot easily pipeline it into a separate thread because each rank
+        # both produces and consumes the generator.  Fall back to a synchronous
+        # save while still keeping process-group collectives on the main thread.
+        if is_distributed:
+            torch.distributed.barrier()
+        state_source.save_generator(
+            raw_generator,
+            iter_dir,
+            strict=False,
+            distributed_save=True,
+            save_every_n_ranks=save_every_n_ranks,
+        )
+        if rank == 0:
+            bridge.hf_pretrained.save_artifacts(iter_dir, original_source_path=hf_source)
+        if is_distributed:
+            torch.distributed.barrier()
+        if get_rank_safe() == 0:
+            logger.info(
+                "Finished HuggingFace full model weight save (distributed_save) in %.2fs -> %s",
+                time() - hf_export_t0,
+                iter_dir,
+            )
+        return
+
+    # Non-distributed save: rank 0 runs streaming safetensors I/O inside ``save_generator`` (which
+    # buffers only one shard at a time).  Other ranks drain the streaming export generator so TP/PP/EP
+    # collectives complete.  We intentionally do **not** buffer the entire model into CPU RAM nor
+    # offload disk writes to a background thread — both would violate collective/threading rules or
+    # double peak memory.
+    if rank != 0:
+        for _ in raw_generator:
+            pass
+        return
+
+    state_source.save_generator(raw_generator, iter_dir, strict=False)
+    bridge.hf_pretrained.save_artifacts(iter_dir, original_source_path=hf_source)
+    if get_rank_safe() == 0:
+        logger.info(
+            "Finished HuggingFace full model weight save (rank0 streaming safetensors) in %.2fs -> %s",
+            time() - hf_export_t0,
+            iter_dir,
+        )
+
+
+def _save_hf_adapter_weights(
+    state: GlobalState,
+    model: list[MegatronModule],
+    iter_dir: str,
+) -> None:
+    """Save PEFT adapter weights as a HuggingFace PEFT directory under ``iter_dir``.
+
+    Writes ``adapter_model.safetensors`` and ``adapter_config.json`` so the
+    output can be loaded directly with ``peft.PeftModel.from_pretrained``.
+
+    The adapter export is intentionally synchronous.  It may issue collectives,
+    and the resulting adapter files are small enough that a separate HF async
+    state machine is not worth the resume/finalization complexity.
+    """
+    cfg = state.cfg
+
+    bridge = _build_auto_bridge_for_save(cfg)
+    peft_config = cfg.peft
+    base_model_name_or_path = _resolve_hf_source(cfg)
+    if not base_model_name_or_path:
+        base_model_name_or_path = str(
+            getattr(bridge.hf_pretrained, "model_name_or_path", "")
+            or getattr(bridge.hf_pretrained, "name_or_path", "")
+        )
+
+    is_distributed = torch.distributed.is_available() and torch.distributed.is_initialized()
+    rank = torch.distributed.get_rank() if is_distributed else 0
+
+    if is_distributed:
+        torch.distributed.barrier()
+
+    if get_rank_safe() == 0:
+        logger.info(
+            "Starting HuggingFace PEFT adapter export to %s (rank=%s)",
+            iter_dir,
+            rank,
+        )
+
+    bridge.save_hf_adapter(
+        model,
+        iter_dir,
+        peft_config=peft_config,
+        base_model_name_or_path=base_model_name_or_path,
+        show_progress=False,
+    )
+    if get_rank_safe() == 0:
+        logger.info("Finished HuggingFace PEFT adapter save -> %s", iter_dir)
+
+    if is_distributed:
+        torch.distributed.barrier()
 
 
 def save_checkpoint(
@@ -834,18 +1104,22 @@ def save_checkpoint(
 
     # Determine checkpoint type and save directory
     save_dir = ckpt_cfg.save
+    is_global_non_persistent_ckpt = non_persistent_ckpt and ckpt_cfg.non_persistent_ckpt_type == "global"
+    checkpoint_step = train_state.step
+    global_non_persistent_keep_count = 0
+    if is_global_non_persistent_ckpt:
+        # Global non-persistent saves must leave a durable resume point, even when retention is configured as zero.
+        global_non_persistent_keep_count = 2 if ckpt_cfg.most_recent_k < 0 else max(1, ckpt_cfg.most_recent_k)
     if non_persistent_ckpt and ckpt_cfg.non_persistent_ckpt_type == "local":
         ckpt_type = CheckpointType.LOCAL
         save_dir = checkpointing_context["local_checkpoint_manager"].local_ckpt_dir
-    elif non_persistent_ckpt and ckpt_cfg.non_persistent_ckpt_type == "global":
+    elif is_global_non_persistent_ckpt:
         ckpt_type = CheckpointType.GLOBAL
         save_dir = (
             ckpt_cfg.non_persistent_global_ckpt_dir
             if ckpt_cfg.non_persistent_global_ckpt_dir
             else os.path.join(save_dir, _NON_PERSISTENT_CKPT_SUBDIR)
         )
-        # TODO Can we ensure the previous checkpoint is saved? We don't want to allow two saves in parallel.
-        cleanup_old_non_persistent_checkpoint(save_dir, leave_ckpt_num=1, do_async=ckpt_cfg.async_save)
     elif non_persistent_ckpt:
         # Invalid non_persistent_ckpt_type value
         raise ValueError(
@@ -970,9 +1244,18 @@ def save_checkpoint(
                         use_megatron_fsdp=cfg.ddp.use_megatron_fsdp,
                     )
 
-    # Apply PEFT filtering to save adapter-only checkpoints
+    # Apply PEFT filtering to preserve the existing adapter-only Megatron
+    # checkpoint behavior.  ``also_save_hf_checkpoint=True`` only adds the
+    # extra HF artifact under ``iter_*/hf/``.
     if cfg.peft is not None:
         state_dict = apply_peft_adapter_filter_to_state_dict(state_dict, cfg.peft)
+
+    # ``also_save_hf_checkpoint=True`` is an extra export:
+    # keep the native Megatron checkpoint behavior at ``iter_*/`` and write HF
+    # artifacts under ``iter_*/hf/`` after the Megatron state is scheduled.
+    is_hf_save = ckpt_type == CheckpointType.GLOBAL and ckpt_cfg.also_save_hf_checkpoint and bool(model)
+    pending_hf_save_dir = _hf_weights_dir(checkpoint_name) if is_hf_save else None
+    dist_save_target = checkpoint_name
 
     if ckpt_type == CheckpointType.GLOBAL:
         if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
@@ -1029,7 +1312,7 @@ def save_checkpoint(
                         thread_count=ckpt_cfg.storage_writers_per_rank,
                     )
                 else:
-                    save_strategy = get_default_save_sharded_strategy(ckpt_cfg.ckpt_format)
+                    save_strategy = TorchDistSaveShardedStrategy()
                 if ckpt_cfg.ckpt_assume_constant_structure and ckpt_cfg.ckpt_format == "torch_dist":
                     save_strategy.use_cached_ckpt_structure = ckpt_cfg.ckpt_assume_constant_structure
                     if checkpointing_context is not None and "load_strategy" in checkpointing_context:
@@ -1059,26 +1342,27 @@ def save_checkpoint(
                 checkpointing_context["save_strategy"] = save_strategy
             end_ckpt = time()
             logger.debug(f"rank: {rank}, takes {end_ckpt - start_ckpt} to prepare state dict for ckpt ")
-            # Guard for main/dev branch submodule compat: async_strategy was removed in mcore dev.
-            _save_params = set(inspect.signature(dist_checkpointing.save).parameters)
-            _save_optional_kwargs: dict[str, Any] = {}
-            if "async_strategy" in _save_params:
-                _save_optional_kwargs["async_strategy"] = ckpt_cfg.async_strategy
             async_save_request = dist_checkpointing.save(
                 state_dict,
-                checkpoint_name,
+                dist_save_target,
                 save_strategy,
                 async_sharded_save=ckpt_cfg.async_save,
+                async_strategy=ckpt_cfg.async_strategy,
                 validate_access_integrity=validate_sharding_integrity,
                 preprocess_common_before_consistancy_check=preprocess_common_state_dict_fn,
                 content_metadata=_clean_metadata_for_serialization(sharded_sd_metadata),
-                **_save_optional_kwargs,
             )
-            # [ModelOpt]: save sharded modelopt_state (skip if model is empty, e.g., low-memory save mode)
+            # [ModelOpt]: save sharded modelopt_state (skip if model is empty, e.g., low-memory save mode).
+            # We always anchor modelopt_state at the iteration directory (``checkpoint_name``) so
+            # that ``has_modelopt_state`` / ``load_modelopt_state`` can discover it via the
+            # standard ``<iter>/modelopt_state/`` path regardless of HF sidecar export.
             if model:
                 # cfg.dist can be None during checkpoint conversion (save_megatron_model)
                 if not (cfg.dist and cfg.dist.use_decentralized_pg):
                     save_sharded_modelopt_state(model, checkpoint_name, (ckpt_cfg.ckpt_format, 1))
+            if pending_hf_save_dir is not None and not ckpt_cfg.async_save:
+                _save_hf_weights(state, model, pending_hf_save_dir)
+                pending_hf_save_dir = None
     else:
         # [ModelOpt]: Inject modelopt_state into state_dict (skip if model is empty)
         if ckpt_type == CheckpointType.LOCAL:
@@ -1260,21 +1544,65 @@ def save_checkpoint(
         else:
             fire_callback()
 
+    # Keep the tracker-selected checkpoint until the async replacement is durable. Only checkpoints at
+    # or before this finalized step participate, because later iteration directories may still be incomplete.
+    if ckpt_cfg.async_save and is_global_non_persistent_ckpt:
+
+        def cleanup_old_non_persistent_checkpoints_finalize_fn() -> None:
+            cleanup_old_non_persistent_checkpoint(
+                save_dir,
+                leave_ckpt_num=global_non_persistent_keep_count,
+                do_async=True,
+                max_iteration=checkpoint_step,
+            )
+
+        assert async_save_request is not None
+        async_save_request.add_finalize_fn(cleanup_old_non_persistent_checkpoints_finalize_fn)
+
+    # Do not remove the tracker-selected checkpoint until its async replacement is durable.
+    if (
+        ckpt_cfg.async_save
+        and ckpt_cfg.most_recent_k > -1
+        and ckpt_type != CheckpointType.LOCAL
+        and not is_global_non_persistent_ckpt
+    ):
+
+        def cleanup_old_checkpoints_finalize_fn() -> None:
+            cleanup_old_non_persistent_checkpoint(
+                save_dir, leave_ckpt_num=ckpt_cfg.most_recent_k, do_async=ckpt_cfg.async_save
+            )
+
+        assert async_save_request is not None
+        async_save_request.add_finalize_fn(cleanup_old_checkpoints_finalize_fn)
+
     if ckpt_cfg.async_save:
         schedule_async_save(state, async_save_request)
         print_rank_0(f"  scheduled an async checkpoint save at iteration {train_state.step:7d} to {save_dir}")
+        if pending_hf_save_dir is not None:
+            _save_hf_weights(state, model, pending_hf_save_dir)
 
     end_misc = time()
     logger.debug(f"rank: {rank}, takes {end_misc - start_misc} to finalize ckpt save ")
 
     fault_tolerance.on_checkpointing_end(global_state=state, is_async_finalization=False)
 
-    # keep only last k checkpoints
-    # Skip for LOCAL checkpoints — LocalCheckpointManager manages its own cleanup.
-    if ckpt_cfg.most_recent_k > -1 and ckpt_type != CheckpointType.LOCAL:
+    if not ckpt_cfg.async_save and is_global_non_persistent_ckpt:
         cleanup_old_non_persistent_checkpoint(
-            save_dir, leave_ckpt_num=ckpt_cfg.most_recent_k, do_async=ckpt_cfg.async_save
+            save_dir,
+            leave_ckpt_num=global_non_persistent_keep_count,
+            do_async=False,
+            max_iteration=checkpoint_step,
         )
+
+    # Keep synchronous cleanup after the fault-tolerance checkpointing section.
+    # Skip for LOCAL checkpoints — LocalCheckpointManager manages its own cleanup.
+    if (
+        not ckpt_cfg.async_save
+        and ckpt_cfg.most_recent_k > -1
+        and ckpt_type != CheckpointType.LOCAL
+        and not is_global_non_persistent_ckpt
+    ):
+        cleanup_old_non_persistent_checkpoint(save_dir, leave_ckpt_num=ckpt_cfg.most_recent_k, do_async=False)
 
     # Wait so everyone is done (not necessary)
     if torch.distributed.is_initialized():
@@ -1285,6 +1613,8 @@ def cleanup_old_non_persistent_checkpoint(
     save_dir: str,
     leave_ckpt_num: int = 1,
     do_async: bool = False,
+    *,
+    max_iteration: int | None = None,
 ) -> None:
     """Clean up old non-persistent checkpoints in a directory.
 
@@ -1295,6 +1625,7 @@ def cleanup_old_non_persistent_checkpoint(
         save_dir: The directory containing non-persistent checkpoints.
         leave_ckpt_num: The number of latest checkpoints to keep.
         do_async: If True, performs cleanup in a background thread.
+        max_iteration: If set, ignores newer iteration directories that may still be incomplete.
     """
     if torch.distributed.is_initialized() and torch.distributed.get_rank() != 0:
         return
@@ -1302,16 +1633,29 @@ def cleanup_old_non_persistent_checkpoint(
 
     iter_prefix = "iter_"
     iter_ckpts = save_dir.rglob(f"{iter_prefix}*")
+    if max_iteration is not None:
+        iter_ckpts = (
+            ckpt_path for ckpt_path in iter_ckpts if int(ckpt_path.name[len(iter_prefix) :]) <= max_iteration
+        )
     sorted_iter_ckpts = sorted(iter_ckpts, key=lambda ckpt_name: int(ckpt_name.name[len(iter_prefix) :]))
     if not sorted_iter_ckpts:
         return
-    rm_iter_ckpts = sorted_iter_ckpts[:-leave_ckpt_num]
+    # `leave_ckpt_num == 0` means keep none: slice with `[:-0]` would be `[:0]` (empty),
+    # so nothing would be removed. Guard it explicitly to remove all instead.
+    if leave_ckpt_num > 0:
+        rm_iter_ckpts = sorted_iter_ckpts[:-leave_ckpt_num]
+        keep_iter_ckpts = sorted_iter_ckpts[-leave_ckpt_num:]
+    else:
+        rm_iter_ckpts = sorted_iter_ckpts
+        keep_iter_ckpts = []
     print_rank_0(f"Non-persistent checkpoints scheduled for removal: {rm_iter_ckpts}")
-    print_rank_0(f"Non-persistent checkpoints to be kept: {sorted_iter_ckpts[-leave_ckpt_num:]}")
+    print_rank_0(f"Non-persistent checkpoints to be kept: {keep_iter_ckpts}")
 
     def remove_iter_ckpts(_iter_ckpts):
-        for ckpt in _iter_ckpts:
-            shutil.rmtree(ckpt)
+        with _CHECKPOINT_CLEANUP_LOCK:
+            for ckpt in _iter_ckpts:
+                if ckpt.exists():
+                    shutil.rmtree(ckpt)
 
     if do_async:
         threading.Thread(target=remove_iter_ckpts, args=(rm_iter_ckpts,)).start()
@@ -1580,8 +1924,11 @@ def generate_state_dict(
         _generate_model_state_dict(model, model_sd_kwargs, ckpt_cfg.ckpt_format, pg_collection=pg_collection)
     )
 
-    # Optimizer stuff.
-    if ckpt_cfg.save_optim:
+    # Optimizer stuff. During load, optimizer sharded-state scaffolding is
+    # required even if the next checkpoint should not save optimizer state.
+    is_loading = bool((optim_sd_kwargs or {}).get("is_loading"))
+    include_optimizer_state = ckpt_cfg.save_optim or is_loading
+    if include_optimizer_state:
         if optimizer is not None and not getattr(optimizer, "is_stub_optimizer", False):
             if ckpt_cfg.ckpt_format == "torch_dist":
                 state_dict["optimizer"] = optimizer.sharded_state_dict(state_dict, **(optim_sd_kwargs or {}))
@@ -1602,7 +1949,7 @@ def generate_state_dict(
         state_dict["rerun_state_machine"] = rerun_state
 
     # RNG states.
-    if ckpt_cfg.save_rng:
+    if ckpt_cfg.save_rng or (is_loading and rng_state is not None):
         state_dict["rng_state"] = rng_state
 
     return state_dict
@@ -1770,7 +2117,7 @@ def _load_model_weights_from_checkpoint(
     pg_collection = get_pg_collection(model)
     sharded_state_dict = _generate_model_state_dict(model, model_sd_kwargs, pg_collection=pg_collection)
 
-    load_strategy = get_default_load_sharded_strategy(checkpoint_path)
+    load_strategy = TorchDistLoadShardedStrategy()
     if fully_parallel_load:
         pg_collection = get_pg_collection(model)
         load_strategy = FullyParallelLoadStrategyWrapper(load_strategy, pg_collection.dp_cp)
@@ -1839,13 +2186,18 @@ def load_checkpoint(
 
     # Finetuning directories
     pretrained_dir = cfg.checkpoint.pretrained_checkpoint
-    if pretrained_dir is not None and not checkpoint_exists(load_dir):
+    has_resume_checkpoint = (
+        checkpoint_exists(load_dir)
+        or is_hf_checkpoint_dir(load_dir)
+        or _has_global_non_persistent_checkpoint(load_dir, cfg.checkpoint)
+    )
+    if pretrained_dir is not None and not has_resume_checkpoint:
         print_rank_0(
             f"Checkpoint file not found in load directory {load_dir}. "
             f"Attempting to finetune with checkpoint in {pretrained_dir}"
         )
         load_dir = pretrained_dir
-        if not checkpoint_exists(load_dir):
+        if not (checkpoint_exists(load_dir) or is_hf_checkpoint_dir(load_dir)):
             raise FileNotFoundError("No checkpoint found in load directory or pretrained directory")
         cfg.checkpoint.finetune = True
 
@@ -2125,6 +2477,34 @@ def _load_model_state_dict(module: torch.nn.Module, state_dict: dict[str, Any], 
             raise
 
 
+def _load_hf_pretrained_checkpoint(
+    hf_dir: str,
+    state: GlobalState,
+    model: list[MegatronModule],
+    optimizer: Optional[MegatronOptimizer],
+    *,
+    skip_load_to_model_and_opt: bool,
+) -> tuple[int, int]:
+    """Load HuggingFace full-model weights for initialization."""
+    cfg = state.cfg
+
+    if not skip_load_to_model_and_opt:
+        bridge = _build_auto_bridge_for_save(cfg, hf_source=hf_dir)
+        bridge.load_hf_weights(model, hf_path=hf_dir)
+
+    state.train_state.step = 0
+
+    # HF checkpoints only initialize model weights. Full training resume should
+    # load the complete Megatron checkpoint through ``checkpoint.load``.
+    if (cfg.model.fp16 or cfg.model.bf16) and optimizer is not None and not cfg.ddp.use_megatron_fsdp:
+        optimizer.reload_model_params()
+
+    if torch.distributed.is_initialized():
+        torch.distributed.barrier()
+
+    return 0, 0
+
+
 def _load_checkpoint_from_path(
     load_dir: str,
     state: GlobalState,
@@ -2165,6 +2545,25 @@ def _load_checkpoint_from_path(
     model = unwrap_model(model)
     pg_collection = pg_collection or get_pg_collection(model)
     ckpt_format = cfg.checkpoint.ckpt_format
+
+    # HuggingFace-format directories are only honored for pretrained model
+    # initialization.  Resume training via ``checkpoint.load`` should use a
+    # complete native Megatron checkpoint.
+    if is_hf_checkpoint_dir(load_dir):
+        if load_dir == cfg.checkpoint.load:
+            raise ValueError(
+                "checkpoint.load does not support HuggingFace-format directories. "
+                "Use checkpoint.load with a native Megatron checkpoint for resume training, "
+                "or use checkpoint.pretrained_checkpoint for full-model HuggingFace initialization."
+            )
+        print_rank_0(f" loading HuggingFace-format checkpoint from {load_dir}")
+        return _load_hf_pretrained_checkpoint(
+            load_dir,
+            state,
+            model,
+            optimizer,
+            skip_load_to_model_and_opt=skip_load_to_model_and_opt,
+        )
 
     # Step 1: Load base checkpoint with rank0=True (torch_dist only)
     if ckpt_format == "torch_dist":
@@ -2313,6 +2712,8 @@ def _load_checkpoint_from_path(
             if not tp_pp_match:
                 print_rank_0("{}: Rerun state will be ignored".format(mismatch_msg))
 
+        if sharded_sd_metadata is None:
+            sharded_sd_metadata = {}
         sharded_sd_metadata["dp_cp_group"] = pg_collection.dp_cp
         optim_sd_kwargs = dict(metadata=sharded_sd_metadata, is_loading=True)
         model_sd_kwargs = dict(metadata=sharded_sd_metadata)
@@ -2536,35 +2937,22 @@ def _load_checkpoint_from_path(
                 and optimizer is not None
                 and not getattr(optimizer, "is_stub_optimizer", False)
             ):
-                # For MegatronMIMO with global torch_dist checkpoints, skip
-                # optimizer.load_state_dict(): dist_checkpointing only saves
-                # common state from rank 0, but non-colocated MegatronMIMO has different
-                # common state per rank (each rank only holds its active
-                # module's param_groups).  The sharded param states are already
-                # loaded by dist_checkpointing.load, and the optimizer was
-                # pre-initialized via sharded_state_dict(is_loading=True).
-                # Local checkpoints save per-rank state, so the skip does not
-                # apply — each rank has its own correct optimizer state.
-                # TODO: Make dist_checkpointing.save collect common state from
-                # all ranks in MegatronMIMO, or have MegatronMIMO replicate all modules' common
-                # state on every rank during save.  That fix belongs in MCore.
-                if not (ckpt_type == CheckpointType.GLOBAL and _is_megatron_mimo):
-                    if isinstance(optimizer, LayerWiseDistributedOptimizer) and ckpt_type == CheckpointType.LOCAL:
-                        # Local checkpoints save LayerWiseDistributedOptimizer state to a
-                        # separate per-rank file at the base local checkpoint directory rather
-                        # than embedding it in the sharded distributed checkpoint.
-                        # Load it back from that file here.
-                        dp_rank = pg_collection.dp.rank()
-                        local_ckpt_dir = checkpointing_context["local_checkpoint_manager"].local_ckpt_dir
-                        optim_ckpt_path = os.path.join(local_ckpt_dir, f"layer_wise_optimizer_{dp_rank}.pt")
-                        optimizer.load_state_dict_from_file(optim_ckpt_path)
-                    else:
-                        # torch.no_grad() is needed for local checkpoints: the
-                        # DistributedOptimizer copies loaded tensors into main
-                        # params via .copy_(), which fails on leaf Variables that
-                        # require grad without this context.
-                        with torch.no_grad():
-                            optimizer.load_state_dict(state_dict["optimizer"])
+                if isinstance(optimizer, LayerWiseDistributedOptimizer) and ckpt_type == CheckpointType.LOCAL:
+                    # Local checkpoints save LayerWiseDistributedOptimizer state to a
+                    # separate per-rank file at the base local checkpoint directory rather
+                    # than embedding it in the sharded distributed checkpoint.
+                    # Load it back from that file here.
+                    dp_rank = pg_collection.dp.rank()
+                    local_ckpt_dir = checkpointing_context["local_checkpoint_manager"].local_ckpt_dir
+                    optim_ckpt_path = os.path.join(local_ckpt_dir, f"layer_wise_optimizer_{dp_rank}.pt")
+                    optimizer.load_state_dict_from_file(optim_ckpt_path)
+                else:
+                    # torch.no_grad() is needed for local checkpoints: the
+                    # DistributedOptimizer copies loaded tensors into main
+                    # params via .copy_(), which fails on leaf Variables that
+                    # require grad without this context.
+                    with torch.no_grad():
+                        optimizer.load_state_dict(state_dict["optimizer"])
 
             if opt_param_scheduler is not None:
                 if "lr_scheduler" in state_dict:
@@ -2948,7 +3336,7 @@ def _load_global_dist_base_checkpoint(
         if checkpoint_path_override is not None
         else get_checkpoint_name(load_dir, iteration, release)
     )
-    load_strategy = get_default_load_sharded_strategy(checkpoint_name)
+    load_strategy = TorchDistLoadShardedStrategy()
     if ckpt_cfg.fully_parallel_load:
         load_strategy = FullyParallelLoadStrategyWrapper(load_strategy, pg_collection.dp_cp)
     if checkpointing_context is not None:

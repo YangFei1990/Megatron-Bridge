@@ -16,23 +16,22 @@ import copy
 from abc import ABC
 from dataclasses import dataclass
 from types import SimpleNamespace
-from typing import Callable, Optional
+from typing import Callable, Literal, Optional
 
-import torch
 from megatron.core import parallel_state
 from megatron.core.activations import fast_gelu, squared_relu
-from megatron.core.models.mamba.mamba_layer_specs import mamba_stack_spec
+from megatron.core.models.hybrid.hybrid_layer_specs import hybrid_stack_spec
 from megatron.core.models.multimodal.llava_model import LLaVAModel
 from megatron.core.models.vision.multimodal_projector import MultimodalProjector
 from megatron.core.models.vision.vit_layer_specs import get_vit_layer_with_transformer_engine_spec
-from megatron.core.transformer.spec_utils import get_submodules
 
-from megatron.bridge.models.mamba.mamba_provider import MambaModelProvider
+from megatron.bridge.models.hybrid.hybrid_provider import HybridModelProvider
 from megatron.bridge.models.nemotron_omni.modeling_nemotron_omni import NemotronOmniModel
+from megatron.bridge.models.nemotron_vl.nemotron_vl_provider import get_language_mlp_submodules
 
 
 @dataclass
-class NemotronVLModelProvider(MambaModelProvider, ABC):
+class NemotronVLModelProvider(HybridModelProvider, ABC):
     """Abstract base provider for Nemotron VL model variants.
 
     Provides common VL fields, RADIO ViT-H vision config building methods, and
@@ -143,9 +142,14 @@ class NemotronVLModelProvider(MambaModelProvider, ABC):
 class NemotronOmniModelProvider(NemotronVLModelProvider):
     """Provider for Nemotron Omni (VL + sound) models.
 
-    Extends NemotronVLModelProvider with sound-specific fields. When has_sound
-    is False, behaves identically to the VL provider (backward compatible).
+    Extends NemotronVLModelProvider with sound-specific fields and fixes RADIO
+    to the public model's dynamic-resolution input contract.
     """
+
+    # The public Nemotron-3 Omni processor emits variable-resolution images
+    # which Bridge pre-patchifies for RADIO. The inherited static RADIO mode
+    # accepts a different 4D tensor contract and is not an Omni configuration.
+    dynamic_resolution: Literal[True] = True
 
     has_sound: bool = False
     sound_model_type: str = "parakeet"
@@ -161,6 +165,27 @@ class NemotronOmniModelProvider(NemotronVLModelProvider):
     separate_video_embedder: bool = False
     temporal_ckpt_compat: bool = False  # formerly allow_checkpoint_without_temporal_compression
 
+    def _validate_omni_config(self) -> None:
+        if self.dynamic_resolution is not True:
+            raise ValueError("Nemotron Omni only supports dynamic_resolution=True.")
+        if self.image_token_index is None or self.image_token_index <= 0:
+            raise ValueError(
+                "Nemotron Omni requires a positive image_token_index from the checkpoint configuration; "
+                f"got {self.image_token_index}. Construct the provider through AutoBridge or set it explicitly."
+            )
+        if self.has_sound and self.sound_context_token_id <= 0:
+            raise ValueError(
+                "Sound-enabled Nemotron Omni requires a positive sound_context_token_id from the checkpoint "
+                f"configuration; got {self.sound_context_token_id}."
+            )
+        if self.has_sound and self.sound_config is None:
+            raise ValueError("Sound-enabled Nemotron Omni requires sound_config from the checkpoint configuration.")
+
+    def finalize(self) -> None:
+        """Finalize a dynamic-resolution Nemotron Omni provider."""
+        self._validate_omni_config()
+        super().finalize()
+
     def _build_vision_config(self, language_cfg):
         """Pin vision encoder to PP=1 (Omni training uses PP>1 on the LLM).
 
@@ -173,14 +198,13 @@ class NemotronOmniModelProvider(NemotronVLModelProvider):
         return vision_cfg
 
     def _build_vision_projection_config(self, language_cfg):
-        """Build vision projection MLP config, overriding activation to ReLU.
+        """Build the vision projection MLP config.
 
-        The HF Nemotron-Omni model uses plain ReLU in its vision projection
-        MLP (mlp1), not the squared_relu used by the language model. Also
-        pin to PP=1 (see :meth:`_build_vision_config`).
+        The HF Nemotron-Omni model uses squared ReLU in its vision projection
+        MLP (mlp1). Also pin to PP=1 (see :meth:`_build_vision_config`).
         """
         vision_proj_cfg = super()._build_vision_projection_config(language_cfg)
-        vision_proj_cfg.activation_func = torch.nn.functional.relu
+        vision_proj_cfg.activation_func = squared_relu
         vision_proj_cfg.pipeline_model_parallel_size = 1
         return vision_proj_cfg
 
@@ -225,14 +249,15 @@ class NemotronOmniModelProvider(NemotronVLModelProvider):
         at construction time -- they can't be added after. This is intentional to
         maintain zero changes to nemotron_vl/.
         """
+        self._validate_omni_config()
         language_cfg = copy.deepcopy(self)
 
         vision_cfg = self._build_vision_config(language_cfg)
         vision_proj_cfg = self._build_vision_projection_config(language_cfg)
 
-        language_spec = mamba_stack_spec
+        language_spec = hybrid_stack_spec
         vision_spec = get_vit_layer_with_transformer_engine_spec()
-        vision_proj_spec = copy.deepcopy(get_submodules(language_spec.submodules.mlp_layer.submodules.mlp))
+        vision_proj_spec = copy.deepcopy(get_language_mlp_submodules(language_spec))
 
         add_encoder_flag = parallel_state.is_pipeline_first_stage() if self.pipeline_model_parallel_size > 1 else True
         add_decoder_flag = True
@@ -246,7 +271,7 @@ class NemotronOmniModelProvider(NemotronVLModelProvider):
             sound_model = self._build_sound_encoder()
 
             sound_proj_cfg = self._build_sound_projection_config(language_cfg)
-            sound_proj_spec = copy.deepcopy(get_submodules(language_spec.submodules.mlp_layer.submodules.mlp))
+            sound_proj_spec = copy.deepcopy(get_language_mlp_submodules(language_spec))
             sound_projection = MultimodalProjector(
                 config=sound_proj_cfg,
                 submodules=sound_proj_spec,
@@ -294,6 +319,13 @@ class NemotronOmniModelProvider(NemotronVLModelProvider):
             separate_video_embedder=self.separate_video_embedder,
             temporal_ckpt_compat=self.temporal_ckpt_compat,
         )
+
+        if self.temporal_patch_dim == 1:
+            # Dynamic image batches already express the exact replacement-token
+            # count in num_image_tiles. Vision-less PP stages cannot infer
+            # LLaVAModel's internal is_packed_dynamic_res flag, so make its
+            # label-only expansion use those counts directly as well.
+            llava_model.img_seq_len = 1
 
         model = NemotronOmniModel(llava_model=llava_model)
 

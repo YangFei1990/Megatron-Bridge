@@ -103,18 +103,25 @@ def _make_vision_config(deterministic: bool = False) -> TransformerConfig:
     return cfg
 
 
-def _make_language_config(deterministic: bool = False) -> TransformerConfig:
+def _make_language_config(
+    deterministic: bool = False,
+    num_moe_experts: int | None = None,
+) -> TransformerConfig:
     cfg = TransformerConfig(
         num_layers=2,
         hidden_size=64,
         ffn_hidden_size=256,
         num_attention_heads=4,
+        num_moe_experts=num_moe_experts,
         pipeline_dtype=torch.float32 if deterministic else torch.bfloat16,
         bf16=not deterministic,
         variable_seq_lengths=True,
         moe_token_dispatcher_type="alltoall",
         cross_entropy_loss_fusion=not deterministic,
     )
+    if num_moe_experts is not None:
+        cfg.moe_ffn_hidden_size = cfg.ffn_hidden_size
+        cfg.moe_router_topk = 1
     if deterministic:
         cfg.attention_backend = AttnBackend.unfused
         cfg.deterministic_mode = True
@@ -124,7 +131,10 @@ def _make_language_config(deterministic: bool = False) -> TransformerConfig:
     return cfg
 
 
-def _build_model_specs(deterministic: bool = False):
+def _build_model_specs(
+    deterministic: bool = False,
+    language_num_moe_experts: int | None = None,
+):
     """Return (language_model_spec, modality_submodules_spec, special_token_ids)."""
     vision_encoder = ModuleSpec(
         module=CLIPViTModel,
@@ -144,8 +154,11 @@ def _build_model_specs(deterministic: bool = False):
     language_model_spec = ModuleSpec(
         module=GPTModel,
         params={
-            "config": _make_language_config(deterministic=deterministic),
-            "transformer_layer_spec": get_gpt_layer_with_transformer_engine_spec(),
+            "config": _make_language_config(
+                deterministic=deterministic,
+                num_moe_experts=language_num_moe_experts,
+            ),
+            "transformer_layer_spec": get_gpt_layer_with_transformer_engine_spec(num_experts=language_num_moe_experts),
             "vocab_size": _VOCAB_SIZE,
             "max_sequence_length": _SEQ_LENGTH,
         },
@@ -263,8 +276,12 @@ def _build_config(
     parallelism_config: MegatronMIMOParallelismConfig,
     train_iters: int = _TRAIN_ITERS,
     deterministic: bool = False,
+    language_num_moe_experts: int | None = None,
 ) -> ConfigContainer:
-    language_model_spec, modality_submodules_spec, special_token_ids = _build_model_specs(deterministic=deterministic)
+    language_model_spec, modality_submodules_spec, special_token_ids = _build_model_specs(
+        deterministic=deterministic,
+        language_num_moe_experts=language_num_moe_experts,
+    )
 
     megatron_mimo_provider = MegatronMIMOProvider(
         language_model_spec=language_model_spec,
@@ -278,7 +295,9 @@ def _build_config(
         bf16=not deterministic,
     )
     if not hasattr(megatron_mimo_provider, "num_moe_experts"):
-        megatron_mimo_provider.num_moe_experts = None
+        megatron_mimo_provider.num_moe_experts = language_num_moe_experts
+    if language_num_moe_experts is not None:
+        megatron_mimo_provider.num_layers = 2
 
     train_cfg = TrainingConfig(
         micro_batch_size=1,
@@ -410,6 +429,7 @@ def _build_resume_config(
     save_interval: int,
     ckpt_save_dir: str,
     ckpt_load_dir: str | None = None,
+    save_rng: bool = True,
 ) -> ConfigContainer:
     """Config builder for the checkpoint-resume L2 test.
 
@@ -448,7 +468,7 @@ def _build_resume_config(
         ckpt_format="torch_dist",
         fully_parallel_save=True,  # llm pp==1 in this test
         dist_ckpt_optim_fully_reshardable=True,
-        save_rng=False,  # MegatronMIMO RNG save produces duplicate shard keys; disable
+        save_rng=save_rng,
     )
     if ckpt_load_dir is not None:
         ckpt_cfg.load = ckpt_load_dir
@@ -566,7 +586,57 @@ class TestMegatronMIMOTraining:
                         os.environ[k] = v
 
     @pytest.mark.run_only_on("GPU")
-    def test_megatron_mimo_checkpoint_resume_dp1_both(self, tmp_path):
+    def test_megatron_mimo_moe_language_smoke_ep1(self):
+        """CI-only MoE smoke for the non-colocated language path.
+
+        With only 2 CI GPUs and non-colocated language+vision modules, the
+        language module has one rank, so this intentionally uses EP=ETP=1.
+        Nontrivial expert parallelism is covered by the manual 8-GPU sweep.
+        """
+        initialize_distributed()
+
+        world_size = dist.get_world_size()
+        if world_size != 2:
+            pytest.skip(f"MegatronMIMO test requires exactly 2 GPUs, got {world_size}")
+
+        import megatron.bridge.training.utils.train_utils as _tu
+
+        _tu.report_theoretical_memory = lambda *a, **kw: None
+
+        par_cfg = MegatronMIMOParallelismConfig(
+            module_parallelisms={
+                "language": ModuleParallelismConfig(
+                    tensor_model_parallel_size=1,
+                    pipeline_model_parallel_size=1,
+                    data_parallel_size=1,
+                    expert_model_parallel_size=1,
+                    expert_tensor_parallel_size=1,
+                    rank_offset=0,
+                ),
+                "vision": ModuleParallelismConfig(
+                    tensor_model_parallel_size=1,
+                    pipeline_model_parallel_size=1,
+                    data_parallel_size=1,
+                    rank_offset=1,
+                ),
+            },
+        )
+
+        cfg = _build_config(
+            par_cfg,
+            train_iters=2,
+            language_num_moe_experts=2,
+        )
+
+        pretrain_megatron_mimo(
+            cfg=cfg,
+            forward_step_func=megatron_mimo_forward_step,
+            build_data_iterators_fn=_build_data_iterators,
+        )
+
+    @pytest.mark.run_only_on("GPU")
+    @pytest.mark.parametrize("save_rng", [True, False], ids=["save_rng", "no_save_rng"])
+    def test_megatron_mimo_checkpoint_resume_dp1_both(self, tmp_path, save_rng):
         """Fast checkpoint-resume check (issue #11 regression guard).
 
         Single torchrun, single process-group init. Runs two ``pretrain_megatron_mimo``
@@ -574,7 +644,12 @@ class TestMegatronMIMOTraining:
         checkpoint; phase 2 loads the same checkpoint and trains to ``TOTAL_STEPS``.
         ``_IndexTaggedDataset`` puts each sample's global index into
         ``sample_index``, and ``_tracing_wrap_iter`` records those indices as the
-        sampler yields them. Asserts:
+        sampler yields them.
+
+        Parametrized over ``save_rng``: the ``True`` case guards the per-module
+        ``ShardedObject("rng_state")`` key-collision fix — without it,
+        ``dist_checkpointing.save`` raises during phase 1 because each MegatronMIMO
+        module emits an identically-keyed RNG ShardedObject. Asserts:
 
         * ``train_state.step`` goes 0 → SAVE_STEPS after phase 1, SAVE_STEPS → TOTAL_STEPS after phase 2
         * ``train_state.consumed_train_samples`` is correctly restored
@@ -629,6 +704,7 @@ class TestMegatronMIMOTraining:
             train_iters=save_steps,
             save_interval=save_steps,
             ckpt_save_dir=ckpt_dir,
+            save_rng=save_rng,
         )
         state_save = GlobalState()
         pretrain_megatron_mimo(
@@ -651,6 +727,7 @@ class TestMegatronMIMOTraining:
             save_interval=total_steps,
             ckpt_save_dir=ckpt_dir,
             ckpt_load_dir=ckpt_dir,
+            save_rng=save_rng,
         )
         # Save phase used train_iters=save_steps so the checkpoint's scheduler
         # state doesn't match total_steps; override so the resumed scheduler uses

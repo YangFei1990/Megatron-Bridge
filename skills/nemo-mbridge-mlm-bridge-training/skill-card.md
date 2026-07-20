@@ -1,5 +1,5 @@
 ## Description: <br>
-Run Megatron-LM (MLM) and Megatron Bridge training with mock or real data, covering correlation testing, available recipes, and multi-GPU examples. <br>
+Run Megatron-LM (MLM) and Megatron Bridge training with mock or real data. Covers correlation testing, available recipes, and multi-GPU examples. <br>
 
 This skill is ready for commercial/non-commercial use. <br>
 
@@ -9,10 +9,16 @@ NVIDIA <br>
 ### License/Terms of Use: <br>
 Apache 2.0 <br>
 ## Use Case: <br>
-Developers and engineers running Megatron-LM or Megatron Bridge training, comparing MLM vs Bridge loss curves, translating MLM CLI arguments to Bridge configuration, or investigating training divergence after code changes. <br>
+Developers and engineers running Megatron-LM and Megatron Bridge training, comparing MLM vs Bridge loss curves, translating MLM CLI arguments to Bridge config, and investigating training correlation issues. <br>
 
 ### Deployment Geography for Use: <br>
 Global <br>
+
+## Requirements / Dependencies: <br>
+**Requires API Key or External Credential:** [Not Specified] <br>
+**Credential Type(s):** [None identified] <br>
+
+Do not include secrets in prompts/logs/output; use least-privilege credentials; rotate keys as appropriate. <br>
 
 ## Known Risks and Mitigations: <br>
 Risk: Review before execution as proposals could introduce incorrect or misleading guidance into skills. <br>
@@ -20,8 +26,8 @@ Mitigation: Review and scan skill before deployment. <br>
 
 ## Reference(s): <br>
 - [Megatron-LM to Megatron Bridge Guide](docs/megatron-lm-to-megatron-bridge.md) <br>
-- [Performance Tuning Guide](docs/performance-guide.md) <br>
-- [Megatron Bridge Documentation](https://docs.nvidia.com/nemo/megatron-bridge/latest/) <br>
+- [Bridge Training Entry Point (run_recipe.py)](scripts/training/run_recipe.py) <br>
+- [NeMo Megatron Bridge Documentation](https://docs.nvidia.com/nemo/megatron-bridge/latest/) <br>
 
 
 ## Skill Output: <br>
@@ -29,6 +35,15 @@ Mitigation: Review and scan skill before deployment. <br>
 **Output Format:** [Markdown with inline bash code blocks] <br>
 **Output Parameters:** [1D] <br>
 **Other Properties Related to Output:** [None] <br>
+
+## Evaluation Agents Used: <br>
+- Claude Code (`claude-code`) <br>
+- Codex (`codex`) <br>
+
+
+
+## Evaluation Tasks: <br>
+Evaluated against 1 internal skill task (positive activation) in astra-sandbox environment using NVSkills-Eval external profile. <br>
 
 ## Evaluation Metrics Used: <br>
 Reported benchmark dimensions: <br>
@@ -38,10 +53,28 @@ Reported benchmark dimensions: <br>
 - Effectiveness: Checks whether the agent performs measurably better with the skill than without it. <br>
 - Efficiency: Checks whether the agent uses fewer tokens and avoids redundant work. <br>
 
+Underlying evaluation signals used in this run: <br>
+- `security`: Checks for unsafe operations, secret leakage, and unauthorized access. <br>
+- `skill_execution`: Verifies that the agent loaded the expected skill and workflow. <br>
+- `skill_efficiency`: Checks routing quality, decoy avoidance, and redundant tool usage. <br>
+- `accuracy`: Grades final-answer correctness against the reference answer. <br>
+- `goal_accuracy`: Checks whether the overall user task completed successfully. <br>
+- `behavior_check`: Verifies expected behavior steps, including safety expectations. <br>
+- `token_efficiency`: Compares token usage with and without the skill. <br>
 
+
+
+## Evaluation Results: <br>
+| Dimension | Num | `claude-code` | `codex` |
+|---|---:|---:|---:|
+| Security | 1 | 100% (+0%) | 100% (+0%) |
+| Correctness | 1 | 100% (+100%) | 97% (+25%) |
+| Discoverability | 1 | 100% (+100%) | 97% (+64%) |
+| Effectiveness | 1 | 100% (+95%) | 100% (+0%) |
+| Efficiency | 1 | 94% (+67%) | 96% (+59%) |
 
 ## Skill Version(s): <br>
-v0.2.0rc6-1465-g0b93319d (source: git describe) <br>
+1.0.0+b7643bd (source: pyproject.toml) <br>
 
 ## Ethical Considerations: <br>
 NVIDIA believes Trustworthy AI is a shared responsibility and we have established policies and practices to enable development for a wide array of AI applications. When downloaded or used in accordance with our terms of service, developers should work with their internal team to ensure this skill meets requirements for the relevant industry and use case and addresses unforeseen product misuse. <br>

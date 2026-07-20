@@ -214,6 +214,8 @@ def finalize_model_grads_multimodule(
 
     The `infra` and `module_to_grid_tuple` parameters are pre-bound via partial().
     We ignore the schedule-provided `pg_collection` and use per-module PGs.
+    The schedule-provided `force_all_reduce` flag is forwarded to MCore's
+    standard finalizer for each active module.
 
     When encoder DP > LLM DP (heterogeneous), the LLM's loss normalization
     divides by tokens for ALL samples it processes, but after bridge fan-out
@@ -226,7 +228,7 @@ def finalize_model_grads_multimodule(
         model: Model list (passed by schedule, ignored - we use module_to_grid_tuple).
         num_tokens: Token count for gradient scaling.
         pg_collection: Schedule-provided PG (ignored - we use per-module PGs).
-        force_all_reduce: Schedule-provided flag (ignored - per-module PGs control sync).
+        force_all_reduce: Schedule-provided flag forwarded to each per-module finalizer.
         infra: MegatronMIMOInfra with per-module pg_collections (keyword-only, bound via partial).
         module_to_grid_tuple: List of (module, grid) tuples (keyword-only, bound via partial).
     """
@@ -272,12 +274,14 @@ def finalize_model_grads_multimodule(
                             [module],
                             num_tokens=num_tokens,
                             pg_collection=module_pg,
+                            force_all_reduce=force_all_reduce,
                         )
                     else:
                         _finalize_model_grads(
                             [module],
                             num_tokens=None,
                             pg_collection=module_pg,
+                            force_all_reduce=force_all_reduce,
                         )
 
         # Phase 2: broadcast the correct global total from LLM to encoder
@@ -304,7 +308,12 @@ def finalize_model_grads_multimodule(
             if module is not None and is_current_rank_in_grid(grid):
                 _, module_pg = _find_module(grid)
                 if module_pg is not None:
-                    _finalize_model_grads([module], num_tokens=None, pg_collection=module_pg)
+                    _finalize_model_grads(
+                        [module],
+                        num_tokens=None,
+                        pg_collection=module_pg,
+                        force_all_reduce=force_all_reduce,
+                    )
 
                     module_dp = _get_dp_size_from_grid(grid)
                     if module_dp != llm_dp:
@@ -362,33 +371,33 @@ def validate_data_loader_contract(
     """Validate data loading constraints for multimodule training.
 
     Checks:
+    - MIMO micro-batch size divisible by all module DP sizes
     - Global batch size divisible by all module DP sizes
-    - Micro-batch size consistent with per-module sharding
-    - num_microbatches * micro_batch_size == global_batch_size / DP_size (per module)
+    - num_microbatches * micro_batch_size == global_batch_size
 
     Args:
         infra: MegatronMIMOInfra with module_to_grid_map.
-        global_batch_size: Total batch size across all data parallel ranks.
-        micro_batch_size: Batch size per microbatch.
+        global_batch_size: Total MIMO batch size per optimizer step.
+        micro_batch_size: Global MIMO batch size per microbatch before module-local DP slicing.
         num_microbatches: Number of microbatches per iteration.
 
     Raises:
         ValueError: If any constraint is violated.
     """
+    expected = num_microbatches * micro_batch_size
+    if expected != global_batch_size:
+        raise ValueError(
+            f"Microbatch mismatch: {num_microbatches} * {micro_batch_size} = {expected} "
+            f"!= global_batch_size ({global_batch_size})"
+        )
+
     for module_name, grid in infra.module_to_grid_map.items():
         # Get DP size from grid
         dp_size = grid.get_pg_size(["dp"])
 
+        if micro_batch_size % dp_size != 0:
+            raise ValueError(f"Micro batch size {micro_batch_size} not divisible by {module_name} DP size {dp_size}")
+
         # Check global batch divisibility
         if global_batch_size % dp_size != 0:
             raise ValueError(f"Global batch size {global_batch_size} not divisible by {module_name} DP size {dp_size}")
-
-        # Check micro-batch alignment
-        per_dp_batch = global_batch_size // dp_size
-        expected = num_microbatches * micro_batch_size
-        if per_dp_batch != expected:
-            raise ValueError(
-                f"Microbatch mismatch for {module_name}: "
-                f"{num_microbatches} * {micro_batch_size} = {expected} != {per_dp_batch} "
-                f"(global_batch / DP_size)"
-            )
